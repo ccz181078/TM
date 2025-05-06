@@ -9,6 +9,11 @@
 #include <sstream>
 #include <unordered_set>
 #include <vector>
+#include <memory>
+#include <deque>
+#include <cstring>
+#include <mutex>
+#include <csignal>
 
 std::ofstream log_stream("log.txt");
 struct MERR{
@@ -375,11 +380,7 @@ struct Word{
 #else
 template<size_t n>
 bool operator<(std::bitset<n> a,std::bitset<n> b){
-	int i = 0;
-	while (i < n && a[i] == b[i]) {
-		++i;
-	}
-	return i<n&&b[i];
+	return memcmp(&a,&b,sizeof(a))<0;
 }
 constexpr int64_t MAX_WORD_LENGTH=64*2;
 struct Word{
@@ -402,7 +403,7 @@ struct Word{
 	Word pop()const{return Word(data>>1,len-1);}
 	std::pair<Word,Word> pop(int64_t n)const{
 		assert(n<MAX_WORD_LENGTH);
-		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max(0LL,len-n))};
+		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max<int64_t>(0L,len-n))};
 	}
 	uint8_t at(int64_t x)const{
 		assert(0<=x&&x<len);
