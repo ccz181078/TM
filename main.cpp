@@ -1,4 +1,20 @@
-#include<bits/stdc++.h>
+#include <algorithm>
+#include <bitset>
+#include <fstream>
+#include <iostream>
+#include <list>
+#include <map>
+#include <random>
+#include <set>
+#include <sstream>
+#include <unordered_set>
+#include <vector>
+#include <memory>
+#include <deque>
+#include <cstring>
+#include <mutex>
+#include <csignal>
+
 std::ofstream log_stream("log.txt");
 struct MERR{
 	void flush(){
@@ -364,8 +380,7 @@ struct Word{
 #else
 template<size_t n>
 bool operator<(std::bitset<n> a,std::bitset<n> b){
-	auto i=(a^b)._Find_first();
-	return i<n&&b[i];
+	return memcmp(&a,&b,sizeof(a))<0;
 }
 constexpr int64_t MAX_WORD_LENGTH=64*2;
 struct Word{
@@ -388,7 +403,7 @@ struct Word{
 	Word pop()const{return Word(data>>1,len-1);}
 	std::pair<Word,Word> pop(int64_t n)const{
 		assert(n<MAX_WORD_LENGTH);
-		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max(0L,len-n))};
+		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max<int64_t>(0L,len-n))};
 	}
 	uint8_t at(int64_t x)const{
 		assert(0<=x&&x<len);
@@ -1978,7 +1993,7 @@ int main_ucb(int argc,char **argv){
 	auto ls=read_file("ucb_in.txt");
 	//auto ls=read_file("../BB25/BB6_holdouts_15535.txt");
 	std::mt19937 mt(123);
-	std::random_shuffle(ls.begin(),ls.end(),[&](size_t n){return mt()%n;});
+	std::shuffle(ls.begin(),ls.end(),mt);
 	UCB ucb;
 	ucb.init(ls);
 	ucb.load();
