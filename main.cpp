@@ -14,6 +14,7 @@
 #include <cstring>
 #include <mutex>
 #include <csignal>
+#include <optional>
 
 std::ofstream log_stream("log.txt");
 struct MERR{
