@@ -16,7 +16,7 @@
 #include <csignal>
 #include <optional>
 
-std::ofstream log_stream("log.txt");
+std::ofstream log_stream;
 struct MERR{
 	void flush(){
 		log_stream.flush();
@@ -1781,9 +1781,7 @@ bool app_stopped = false;
 
 std::mutex mtx;
 std::vector<std::string> todo;
-int main_verify(int argc,char **argv,bool may_fail){
-	if(argc<2)assert(0);
-	std::ifstream ifs(argv[1]);
+int main_verify(std::ifstream &ifs, bool may_fail){
 	assert(ifs.is_open());
 	for(std::string ln;std::getline(ifs,ln);){
 		while(isspace(ln.back()))ln.pop_back();
@@ -1986,7 +1984,7 @@ void sigint_handler(int sig){
 	}
 }
 
-int main_ucb(int argc,char **argv){
+int main_ucb() {//int argc,char **argv){
 	//auto ls=read_file("../../BB25/3x3.todo.txt");
 	//auto ls=read_file("../BB25/2x5_holdouts_217.txt");
 	//auto ls=read_file("../BB25/BB6_unknown.txt");
@@ -2260,24 +2258,143 @@ int main_1(int64_t pos){
 	return 0;
 }
 
-
+typedef enum {
+	NONE,
+	ENUM,
+	UCB,
+	VERIFY,
+	EXEC
+} Command;
 
 int main(int argc,char **argv){
 	//if(argc==1)return main_1();
 	assert(argc>=2);
 	signal(SIGINT,sigint_handler);
-	if(!strcmp(argv[1],"enum")){
-		assert(argc>=3);
-		return main_1(atoi(argv[2]));
-	}else if(!strcmp(argv[1],"ucb")){
-		main_ucb(argc-1,argv+1);
-	}else if(!strcmp(argv[1],"verify")){
-		main_verify(argc-1,argv+1,0);
-	}else if(!strcmp(argv[1],"exec")){
-		main_verify(argc-1,argv+1,1);
-	}else{
-		std::cerr<<"unknown task: "<<argv[1]<<'\n';
-		assert(0);
+	std::string filename = "out.txt";
+	std::string blockstr;
+	std::ifstream verifile;
+	Command command = NONE;
+	for (int i=1;i!=argc;i++) {
+		std::string token = argv[i];
+		if (token == "enum") {
+			if (command != NONE) std::cerr << "WARNING: multiple commands are not yet supported";
+			command = ENUM;
+		} else if (token == "ucb") {
+			if (command != NONE) std::cerr << "WARNING: multiple commands are not yet supported";
+			command = UCB;
+			if (i + 1 == argc) {
+				std::cerr << "-o not given a file";
+				return 1;
+			}
+			verifile = std::ifstream(argv[++i]);
+		} else if (token == "verify") {
+			if (command != NONE) std::cerr << "WARNING: multiple commands are not yet supported";
+			command = VERIFY;
+		} else if (token == "exec") {
+			if (command != NONE) std::cerr << "WARNING: multiple commands are not yet supported";
+			command = EXEC;
+		} else if (argv[i][0] == '-') {
+			// options are each a single character
+
+			// number of argv values ahead used
+			int used = 0;
+
+			for (int subindex=1;argv[i][subindex];subindex++) {
+				switch (argv[i][subindex]) {
+					case 'h':
+						std::cerr << "Usage:  enum (<num> | <start>..<end>) [-o (file.txt | 'file{}.txt')]\n";
+						std::cerr << "Usage:  ucb [-o (file.txt | 'file{}.txt')]\n";
+						std::cerr << "Usage:  (verify | exec) <filename> [-o (file.txt | 'file{}.txt')]\n";
+
+						std::cerr << "Runs one of the tasks 'enum' 'ucb' 'verify' or 'exec' on a block or range of blocks\n";
+						std::cerr << "If a file is provided, output will be written to it. If the file contains the literal '{}',\n";
+						std::cerr << "It will be replaced with each block number\n";
+						break;
+					case 'o':
+						if (i + 1 == argc) {
+							std::cerr << "-o not given a file";
+							return 1;
+						}
+						filename = argv[i+1];
+						used = 1;
+						break;
+					default:
+						std::cerr << "Unknown command. Try -h to view details\n";
+				}
+			}
+			i += used;
+		} else if (argv[i][0] >= '0' && argv[i][0] <= '9') {
+			// '0' < char < '9' is pretty hacky but detects numbers
+			if (blockstr != "") std::cerr << "WARNING: Multiple block regions are not yet supported";
+			blockstr = argv[i];
+		} else {
+			std::cerr << "Unknown command. Try -h to view details\n";
+		}
+	}
+	
+	// Convert string blockstr into a start and end
+	int start;
+	int end;
+	int index = blockstr.find("..");
+	if (index == -1) {
+		// No occurances
+		start = std::stoi(blockstr);
+		end = start;
+	} else {
+		std::string startstr = blockstr.substr(0, index);
+		// Add 2 to skip the ..
+		std::string endstr = blockstr.substr(index + 2);
+		
+		start = std::stoi(startstr);
+		end = std::stoi(endstr);
+	}
+
+	if (start > end) {
+		std::cerr << "ERROR: the starting block cannot be after the ending block.\n";
+		return 1;
+	}
+
+	std::cout << "Ranging from block " << start << " to block " << end << "\n";
+
+	// whether or not the file is dependend on block# 
+	bool fancynames;
+
+	// the parts of the name before and after the inserted number
+	std::string prename;
+	std::string postname;
+	
+	index = filename.find("{}");
+	if (index == -1) {
+		fancynames = false;
+	} else {
+		fancynames = true;
+		prename = filename.substr(0, index);
+		postname = filename.substr(index+2);
+	}
+
+	switch (command) {
+		case ENUM:
+			// Add 1 to end to be inclusive, inclusive
+			for (int block=start;block!=end+1;block++) {
+				// Get the current file
+				if (fancynames) {
+					log_stream = std::ofstream(prename + std::to_string(block) + postname);
+				} else {
+					log_stream = std::ofstream(filename);
+				}
+				main_1(block);
+			}
+			break;
+		case UCB:
+			main_ucb();
+			break;
+		case VERIFY:
+			main_verify(verifile, 0);
+			break;
+		case EXEC:
+			main_verify(verifile, 1);
+		default:
+			std::cerr << "No task specified\n";
 	}
 	return 0;
 }
