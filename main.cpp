@@ -2393,6 +2393,7 @@ int main(int argc,char **argv){
 			break;
 		case EXEC:
 			main_verify(verifile, 1);
+			break;
 		default:
 			std::cerr << "No task specified\n";
 	}
