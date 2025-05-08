@@ -2260,6 +2260,25 @@ int main_1(int64_t pos){
 	return 0;
 }
 
+int main_enum(int argc,char **argv){
+	assert(argc>=2);
+	int64_t l=atoi(argv[1]),r=l;
+	if(argc>=3){
+		r=atoi(argv[2]);
+		assert(argc==3);
+	}
+	std::cout<<"task id:  "<<l<<".."<<r<<std::endl;
+	for(int64_t i=l;i<=r;++i){
+		log_stream=std::ofstream(std::string("holdouts_")+std::to_string(i)+".txt");
+		main_1(i);
+		if(app_stopped){
+			merr<<"stopped\n";
+			break;
+		}
+	}
+	std::cout<<"finished"<<std::endl;
+	return 0;
+}
 
 
 int main(int argc,char **argv){
@@ -2267,8 +2286,7 @@ int main(int argc,char **argv){
 	assert(argc>=2);
 	signal(SIGINT,sigint_handler);
 	if(!strcmp(argv[1],"enum")){
-		assert(argc>=3);
-		return main_1(atoi(argv[2]));
+		main_enum(argc-1,argv+1);
 	}else if(!strcmp(argv[1],"ucb")){
 		main_ucb(argc-1,argv+1);
 	}else if(!strcmp(argv[1],"verify")){
