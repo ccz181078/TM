@@ -8,6 +8,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 #include <memory>
 #include <deque>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <csignal>
 #include <optional>
+#include <functional>
 
 std::ofstream log_stream("log.txt");
 struct MERR{
