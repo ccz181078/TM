@@ -1,4 +1,22 @@
-#include<bits/stdc++.h>
+#include <algorithm>
+//#include <bitset>
+#include <fstream>
+#include <iostream>
+#include <list>
+#include <map>
+#include <random>
+#include <set>
+#include <sstream>
+#include <unordered_set>
+#include <vector>
+#include <memory>
+#include <deque>
+#include <cstring>
+#include <mutex>
+#include <csignal>
+#include <optional>
+#include <variant>
+#include <cassert>
 std::mutex mtx;
 std::ofstream log_stream("log.txt", std::ios::app);
 struct MERR{
@@ -298,7 +316,7 @@ std::pair<T,std::vector<T>> pop_front(std::vector<T> w){
 }
 
 struct WordLenError{};
-#if 0
+#if 1
 constexpr int64_t MAX_WORD_LENGTH=32;
 struct Word{
 	uint32_t data;
@@ -314,7 +332,7 @@ struct Word{
 	Word pop()const{return Word(data>>1,len-1);}
 	std::pair<Word,Word> pop(int64_t n)const{
 		assert(n<MAX_WORD_LENGTH);
-		return {Word(data&((1uL<<n)-1uL),n),Word(data>>n,std::max(0L,len-n))};
+		return {Word(data&((1uL<<n)-1uL),n),Word(data>>n,std::max<int64_t>(0,len-n))};
 	}
 	Word push(uint8_t in)const{
 		assert(in==0||in==1);
@@ -400,7 +418,7 @@ struct Word{
 	Word pop()const{return Word(data>>1,len-1);}
 	std::pair<Word,Word> pop(int64_t n)const{
 		assert(n<MAX_WORD_LENGTH);
-		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max(0L,len-n))};
+		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max<int64_t>(0,len-n))};
 	}
 	uint8_t at(int64_t x)const{
 		assert(0<=x&&x<len);
@@ -2980,7 +2998,7 @@ int main_ucb(int argc,char **argv){
 	auto ls=read_file("ucb_in.txt");
 	//auto ls=read_file("../BB25/BB6_holdouts_15535.txt");
 	std::mt19937 mt(123);
-	std::random_shuffle(ls.begin(),ls.end(),[&](size_t n){return mt()%n;});
+	std::shuffle(ls.begin(),ls.end(),mt);
 	UCB ucb;
 	ucb.init(ls);
 	ucb.load();
