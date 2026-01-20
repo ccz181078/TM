@@ -17,6 +17,7 @@
 #include <csignal>
 #include <optional>
 #include <variant>
+#include <functional>
 #include <cassert>
 std::mutex mtx;
 std::ofstream log_stream("log.txt", std::ios::app);
