@@ -566,6 +566,12 @@ struct DH_Tape{
 		}
 		return std::nullopt;
 	}
+	std::optional<std::tuple<int64_t,int64_t,int64_t>> check_halt_cont(const TM &tm,int64_t maxT){
+		for(int64_t i=1;i<=maxT;++i){
+			if(step(tm))return std::make_tuple(i,last_s,last_in);
+		}
+		return std::nullopt;
+	}
 	friend std::ostream &operator<<(std::ostream &os,const DH_Tape &t){
 		if(t.sgn==1){
 			os<<t.l<<' '<<char('A'+t.s)<<"> "<<rev(t.r);
@@ -923,20 +929,20 @@ struct Decider{
 		std::map<DFA_state_t,size_t> id;
 		std::vector<const DFA_state_t*> idr;
 
-		std::unordered_map<size_t,std::vector<std::pair<Word,size_t>>> pop_;
+		std::vector<std::vector<std::pair<Word,size_t>>> pop_;
 		std::map<std::pair<Word,size_t>,size_t> push_;
 		
 		size_t n_upd=0;
 		bool upd_flag=0;
 		std::vector<std::pair<size_t,std::pair<Word,size_t>>> upds;
 		size_t push(Word w,size_t ls){
-			//std::cerr<<"push "<<w<<" "<<ls<<" "<<idr.size()-1<<'\n';
 			auto &ret=push_[{w,ls}];
 			if(!ret){
-				auto ls_=*idr.at(ls);
+				auto ls_=*idr[ls];
 				ls_.push(w);
 				auto ls0=get_id(ls_);
 				ret=ls0;
+				if(pop_.size()<=ls0)pop_.resize(ls0+1);
 				pop_[ls0].emplace_back(w,ls);
 				upd_flag=1;
 				++n_upd;
@@ -974,8 +980,8 @@ struct Decider{
 		friend std::ostream &operator<<(std::ostream &os,const DFA &x){
 			for(size_t i=1;i<x.idr.size();++i){
 				merr<<*x.idr.at(i)<<":\n";
-				if(x.pop_.count(i))
-				for(auto [w,r1]:x.pop_.at(i)){
+				if(i<x.pop_.size())
+				for(auto [w,r1]:x.pop_[i]){
 					merr<<w<<" => "<<*x.idr.at(r1)<<'\n';
 				}
 			}
@@ -988,10 +994,12 @@ struct Decider{
 	
 	size_t len=1;
 	
-	std::map<std::pair<size_t,int64_t>,std::set<Tape>> inqs;
+	std::vector<std::set<Tape>> inqs[2];
 	void push(Tape t){
 		auto [l,r,s,sgn]=t;
-		if(inqs[{r,sgn}].insert(t).second)q.push_back(t);
+		auto &vec=inqs[sgn==1?1:0];
+		if(vec.size()<=r)vec.resize(r+1);
+		if(vec[r].insert(t).second)q.push_back(t);
 	}
 	
 	void print_Tape(Tape t){
@@ -1006,18 +1014,14 @@ struct Decider{
 		merr<<*rset.idr.at(r);
 	}
 	#define dbg1 dbg
-	std::optional<std::list<Tape>> step(const TM &tm,Tape t,std::pair<Word,size_t> rs){
-		//std::cerr<<"step "<<t<<rs<<'\n';
-		std::list<Tape> ls;
+	std::optional<Tape> step(const TM &tm,Tape t,std::pair<Word,size_t> rs){
 		auto [l,r,s,sgn]=t;
-		//auto rs=(sgn==1?rset:lset).pop_[r];
 		if(dbg){
 			merr<<"step: ";
 			print_Tape(t);
 			merr<<"\n";
 		}
 		auto [w,r1]=rs;
-		//if(dbg)merr<<"step: "<<w<<" "<<(sgn==1?rset:lset).idr.at(r1)<<"\n";
 		auto [w0,w1]=w.pop_chrs(len);
 		auto res=WordUpdateLemma::from(tm,w0,s,sgn);
 		if(!res){
@@ -1030,11 +1034,10 @@ struct Decider{
 		}
 		w1=upd(w1,w0,s,sgn);
 		if(res->is_back){
-			ls.emplace_back(Tape{(sgn==1?rset:lset).push(res->w1+w1,r1),l,res->s1,-sgn});
+			return Tape{(sgn==1?rset:lset).push(res->w1+w1,r1),l,res->s1,-sgn};
 		}else{
-			ls.emplace_back(Tape{(sgn==1?lset:rset).push(rev(res->w1)+w1,l),r1,res->s1,sgn});
+			return Tape{(sgn==1?lset:rset).push(rev(res->w1)+w1,l),r1,res->s1,sgn};
 		}
-		return ls;
 	}
 	int64_t decide(const TM &tm,int64_t maxT,const DH_Tape &tape0){
 		try{
@@ -1050,38 +1053,47 @@ struct Decider{
 		auto r1=rset.push_all((tape0.sgn==1?tape0.r:tape0.l),1,len);
 		if(tape0.sgn==-1)std::swap(l1,r1);
 		push(Tape{l1,r1,tape0.s,tape0.sgn});
+		std::vector<std::pair<Word,size_t>> tmp_rs;
+		std::vector<Tape> tmp_ts;
 		for(;;){
-			if(q.size()){
+			if(!q.empty()){
 				Tape t=q.back();
 				q.pop_back();
 				auto [l,r,s,sgn]=t;
-				auto rs=(sgn==1?rset:lset).pop_[r];
-				for(auto rs0:rs){
-					auto ls=step(tm,t,rs0);
-					if(!ls)return 0;
-					for(Tape &t0:*ls)push(t0);
+				auto &pvec=(sgn==1?rset:lset).pop_;
+				if(r<pvec.size()){
+					tmp_rs.assign(pvec[r].begin(),pvec[r].end());
+					for(const auto &rs0:tmp_rs){
+						auto t0=step(tm,t,rs0);
+						if(!t0)return 0;
+						push(*t0);
+					}
 				}
 			}else if(!lset.upds.empty()){
 				auto [id0,rs0]=lset.upds.back();
 				lset.upds.pop_back();
-				auto ts=inqs[{id0,-1}];
-				for(auto t:ts){
-					auto ls=step(tm,t,rs0);
-					if(!ls)return 0;
-					for(Tape &t0:*ls)push(t0);
+				if(id0<inqs[0].size()&&!inqs[0][id0].empty()){
+					tmp_ts.assign(inqs[0][id0].begin(),inqs[0][id0].end());
+					for(const auto &t:tmp_ts){
+						auto t0=step(tm,t,rs0);
+						if(!t0)return 0;
+						push(*t0);
+					}
 				}
 			}else if(!rset.upds.empty()){
 				auto [id0,rs0]=rset.upds.back();
 				rset.upds.pop_back();
-				auto ts=inqs[{id0,1}];
-				for(auto t:ts){
-					auto ls=step(tm,t,rs0);
-					if(!ls)return 0;
-					for(Tape &t0:*ls)push(t0);
+				if(id0<inqs[1].size()&&!inqs[1][id0].empty()){
+					tmp_ts.assign(inqs[1][id0].begin(),inqs[1][id0].end());
+					for(const auto &t:tmp_ts){
+						auto t0=step(tm,t,rs0);
+						if(!t0)return 0;
+						push(*t0);
+					}
 				}
 			}else{
 				std::set<Tape> inq;
-				for(auto [k,v]:inqs)for(auto t:v)inq.insert(t);
+				for(int side=0;side<2;++side)for(const auto &v:inqs[side])for(const auto &t:v)inq.insert(t);
 				assert(CTL_skip_verify||CTL_Fixedlen_verify::Verifier(lset.push_,rset.push_,inq,1,1).verify(tm,len,tape0));
 				if(dbg1)std::cerr<<'\n'<<tm<<" N"<<" T:"<<used_T<<'\n';
 				return 2;
@@ -2060,15 +2072,45 @@ struct TNF{
 		}
 		dfs(tm,min_unused_state,min_unused_char,rest_trans);
 	}
+	static int64_t run_ng(const TM &tm,int64_t lruh,int64_t h,int64_t maxT,size_t ng_n){
+		ChrTransform::init();
+		ChrTransform::len_h=lruh;
+		ChrTransform::len_h_no_lru=h;
+		MitM_CTL::NG::init();
+		MitM_CTL::NG::NG_n=ng_n;
+		MitM_CTL::Decider<MitM_CTL::NG> f;
+		f.len=1;
+		DH_Tape tape0;
+		return f.decide(tm,maxT,tape0);
+	}
+	static int64_t run_cps_lru(const TM &tm,const DH_Tape &tape_sim,int64_t maxT,int64_t lruh,int64_t h,int64_t th,size_t n){
+		if(tape_sim.s==-1)return 0;
+		ChrTransform::init();
+		MitM_CTL::CPS_LRU::init();
+		MitM_CTL::CPS_LRU::len_h=lruh;
+		MitM_CTL::CPS_LRU::len_h_no_lru=h;
+		MitM_CTL::CPS_LRU::len_h_tail=th;
+		MitM_CTL::Decider<MitM_CTL::CPS_LRU> f;
+		f.len=n;
+		return f.decide(tm,maxT,tape_sim);
+	}
+	static int64_t run_rwl_mod(const TM &tm,const DH_Tape &tape_sim,int64_t maxT,int64_t h,int64_t mod,size_t n){
+		if(tape_sim.s==-1)return 0;
+		ChrTransform::init();
+		MitM_CTL::RWL_mod::init();
+		MitM_CTL::RWL_mod::len_h=h;
+		MitM_CTL::RWL_mod::mod=mod;
+		MitM_CTL::Decider<MitM_CTL::RWL_mod> f;
+		f.len=n;
+		return f.decide(tm,maxT,tape_sim);
+	}
 	void dfs(TM &tm,int64_t min_unused_state,int64_t min_unused_char,int64_t rest_trans){
 		if(app_stopped)return;
-		{
-			DH_Tape t;
-			if(auto o=t.check_halt(tm,50)){
-				auto [T,s,m]=*o;
-				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
-				goto o;
-			}
+		DH_Tape ht;
+		if(auto o=ht.check_halt(tm,50)){
+			auto [T,s,m]=*o;
+			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			goto o;
 		}
 		{
 			Basic0::Tape t;
@@ -2076,13 +2118,10 @@ struct TNF{
 				goto o_nonhalt;
 			}
 		}
-		{
-			DH_Tape t;
-			if(auto o=t.check_halt(tm,300)){
-				auto [T,s,m]=*o;
-				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
-				goto o;
-			}
+		if(auto o=ht.check_halt_cont(tm,250)){
+			auto [T,s,m]=*o;
+			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			goto o;
 		}
 		{
 			Basic0::Tape t;
@@ -2091,78 +2130,54 @@ struct TNF{
 			}
 		}
 		MitM_CTL::CTL_skip_verify=1;
-		for(const char *cmd:{
-			"chr_LRUH 0 chr_H 0 MitM_CTL NG maxT 100 NG_n 1 run",
-			"chr_LRUH 0 chr_H 0 MitM_CTL NG maxT 200 NG_n 2 run",
-			//"MitM_CTL CPS_LRU sim 1001 maxT 3000 LRUH 3 H 1 tH 0 n 2 run"
-			"chr_LRUH 0 chr_H 0 MitM_CTL NG maxT 300 NG_n 3 run",
-			"chr_LRUH 6 chr_H 3 MitM_CTL NG maxT 3000 NG_n 3 run",
-		}){
-			std::stringstream ss;
-			ss<<tm<<" "<<cmd<<"\n";
-			LineExec le(ss.str());
-			if(le.result==2)goto o_nonhalt;
+		if(run_ng(tm,0,0,100,1)==2)goto o_nonhalt;
+		if(run_ng(tm,0,0,200,2)==2)goto o_nonhalt;
+		if(run_ng(tm,0,0,300,3)==2)goto o_nonhalt;
+		if(run_ng(tm,6,3,3000,3)==2)goto o_nonhalt;
+		if(auto o=ht.check_halt_cont(tm,701)){
+			auto [T,s,m]=*o;
+			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			goto o;
 		}
 		{
-			DH_Tape t;
-			if(auto o=t.check_halt(tm,3000)){
+			DH_Tape tape_1001=ht;
+			if(auto o=ht.check_halt_cont(tm,1999)){
 				auto [T,s,m]=*o;
 				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
 				goto o;
 			}
-		}
-		{
-			Basic0::Tape t;
-			if(t.check_translated_cycler(tm,3000,3000)){
-				goto o_nonhalt;
+			{
+				Basic0::Tape t;
+				if(t.check_translated_cycler(tm,3000,3000)){
+					goto o_nonhalt;
+				}
 			}
-		}
-		for(const char *cmd:{
-			"chr_LRUH 14 chr_H 8 MitM_CTL NG maxT 1000 NG_n 2 run",
-			"chr_LRUH 4 chr_H 2 MitM_CTL NG maxT 3000 NG_n 1 run",
-			"MitM_CTL CPS_LRU sim 1001 maxT 1000 LRUH 4 H 1 tH 0 n 6 run",
-			
-			"chr_LRUH 12 chr_H 12 MitM_CTL NG maxT 3000 NG_n 3 run",
-			"MitM_CTL RWL_mod sim 1001 maxT 3000 H 4 mod 2 n 8 run",
-		}){
-			std::stringstream ss;
-			ss<<tm<<" "<<cmd<<"\n";
-			LineExec le(ss.str());
-			if(le.result==2)goto o_nonhalt;
-		}
-		{
-			DH_Tape t;
-			if(auto o=t.check_halt(tm,30000)){
+			if(run_ng(tm,14,8,1000,2)==2)goto o_nonhalt;
+			if(run_ng(tm,4,2,3000,1)==2)goto o_nonhalt;
+			if(run_cps_lru(tm,tape_1001,1000,4,1,0,6)==2)goto o_nonhalt;
+			if(run_ng(tm,12,12,3000,3)==2)goto o_nonhalt;
+			if(run_rwl_mod(tm,tape_1001,3000,4,2,8)==2)goto o_nonhalt;
+			if(auto o=ht.check_halt_cont(tm,27000)){
 				auto [T,s,m]=*o;
 				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
 				goto o;
 			}
-		}
-		{
-			Basic0::Tape t;
-			if(t.check_translated_cycler(tm,30000,30000)){
-				goto o_nonhalt;
+			{
+				Basic0::Tape t;
+				if(t.check_translated_cycler(tm,30000,30000)){
+					goto o_nonhalt;
+				}
 			}
-		}
-		for(const char *cmd:{
-			"MitM_CTL RWL_mod sim 1001 maxT 10000 H 3 mod 2 n 1 run",
-			"MitM_CTL CPS_LRU sim 1001 maxT 3000 LRUH 12 H 1 tH 1 n 2 run",
-			"MitM_CTL RWL_mod sim 1001 maxT 3000 H 6 mod 3 n 2 run",
-			"chr_LRUH 0 chr_H 0 MitM_CTL NG maxT 10000 NG_n 5 run",
-			"MitM_CTL CPS_LRU sim 1001 maxT 3000 LRUH 4 H 0 tH 1 n 4 run",
-			"chr_LRUH 6 chr_H 6 MitM_CTL NG maxT 3000 NG_n 1 run",
-			"chr_LRUH 16 chr_H 12 MitM_CTL NG maxT 10000 NG_n 5 run",
-			"MitM_CTL CPS_LRU sim 1001 maxT 3000 LRUH 16 H 0 tH 2 n 3 run",
-			"chr_LRUH 5 chr_H 1 MitM_CTL NG maxT 10000 NG_n 2 run",
-		}){
-			std::stringstream ss;
-			ss<<tm<<" "<<cmd<<"\n";
-			LineExec le(ss.str());
-			if(le.result==2)goto o_nonhalt;
-		}
-		{
-			DH_Tape t;
-			if(auto o=t.check_halt(tm,300000)){
+			if(run_rwl_mod(tm,tape_1001,10000,3,2,1)==2)goto o_nonhalt;
+			if(run_cps_lru(tm,tape_1001,3000,12,1,1,2)==2)goto o_nonhalt;
+			if(run_rwl_mod(tm,tape_1001,3000,6,3,2)==2)goto o_nonhalt;
+			if(run_ng(tm,0,0,10000,5)==2)goto o_nonhalt;
+			if(run_cps_lru(tm,tape_1001,3000,4,0,1,4)==2)goto o_nonhalt;
+			if(run_ng(tm,6,6,3000,1)==2)goto o_nonhalt;
+			if(run_ng(tm,16,12,10000,5)==2)goto o_nonhalt;
+			if(run_cps_lru(tm,tape_1001,3000,16,0,2,3)==2)goto o_nonhalt;
+			if(run_ng(tm,5,1,10000,2)==2)goto o_nonhalt;
+			if(auto o=ht.check_halt_cont(tm,270000)){
 				auto [T,s,m]=*o;
 				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
 				goto o;
