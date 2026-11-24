@@ -191,9 +191,9 @@ typedef uint8_t chr_t;
 
 constexpr int64_t tm_fmt=2;
 struct Trans{
-	int64_t nxt,out,dir;
+	int8_t nxt,out,dir,_pad=0;
 	Trans():nxt(-1),out(1),dir(1){}
-	Trans(int64_t s,int64_t o,int64_t d):nxt(s),out(o),dir(d){}
+	Trans(int64_t s,int64_t o,int64_t d):nxt((int8_t)s),out((int8_t)o),dir((int8_t)d){}
 	bool operator==(const Trans &tr)const{
 		return nxt==tr.nxt && out==tr.out && dir==tr.dir;
 	}
@@ -206,7 +206,7 @@ struct Trans{
 	friend std::ostream &operator<<(std::ostream &os,const Trans &tr){
 		os<<("_1"[tr.out])<<' '<<(tr.dir==1?'r':'l')<<' ';
 		if(tr.nxt==-1)os<<"halt";
-		else os<<tr.nxt;
+		else os<<(int)tr.nxt;
 		return os;
 	}
 };
@@ -381,97 +381,140 @@ struct Word{
 	}
 };
 #else
-template<size_t n>
-bool operator<(std::bitset<n> a,std::bitset<n> b){
-	return memcmp(&a,&b,sizeof(a))<0;
-}
 constexpr int64_t MAX_WORD_LENGTH=64*2;
 struct Word{
-	std::bitset<MAX_WORD_LENGTH> data;
+	uint64_t lo,hi;
 	int64_t len;
-	Word(std::bitset<MAX_WORD_LENGTH> d,int64_t n):data(d),len(n){
+	Word():lo(0),hi(0),len(0){}
+	Word(unsigned __int128 d,int64_t n):lo((uint64_t)d),hi((uint64_t)(d>>64)),len(n){
 		assert(0<=len&&len<=MAX_WORD_LENGTH);
 	}
-	Word operator+(const Word &w)const{
-		if(len+w.len>MAX_WORD_LENGTH)throw WordLenError();
-		return Word(data|(w.data<<len),len+w.len);
+	Word(uint64_t l,uint64_t h,int64_t n):lo(l),hi(h),len(n){
+		assert(0<=len&&len<=MAX_WORD_LENGTH);
 	}
-	Word set(int64_t x,int64_t y){
+	inline unsigned __int128 to_u128()const{
+		return ((unsigned __int128)hi<<64)|lo;
+	}
+	inline Word operator+(const Word &w)const{
+		if(len+w.len>MAX_WORD_LENGTH)throw WordLenError();
+		if(w.len==0)return *this;
+		if(len==0)return w;
+		return Word(to_u128()|(w.to_u128()<<len),len+w.len);
+	}
+	inline Word set(int64_t x,int64_t y)const{
 		assert(0<=x&&x<len);
 		assert(0<=y&&y<2);
-		auto d0=data;
-		d0.set(x,y);
-		return Word(d0,len);
+		Word r=*this;
+		if(x<64){
+			if(y)r.lo|=(1ULL<<x);
+			else r.lo&=~(1ULL<<x);
+		}else{
+			if(y)r.hi|=(1ULL<<(x-64));
+			else r.hi&=~(1ULL<<(x-64));
+		}
+		return r;
 	}
-	Word pop()const{return Word(data>>1,len-1);}
-	std::pair<Word,Word> pop(int64_t n)const{
+	inline Word pop()const{return Word(to_u128()>>1,len-1);}
+	inline std::pair<Word,Word> pop(int64_t n)const{
 		assert(n<MAX_WORD_LENGTH);
-		return {Word(data<<(MAX_WORD_LENGTH-n)>>(MAX_WORD_LENGTH-n),n),Word(data>>n,std::max<int64_t>(0L,len-n))};
+		unsigned __int128 d=to_u128();
+		unsigned __int128 mask=(n==0)?0:(((unsigned __int128)1<<n)-1);
+		return {Word(d&mask,n),Word(d>>n,std::max<int64_t>(0L,len-n))};
 	}
-	uint8_t at(int64_t x)const{
+	inline uint8_t at(int64_t x)const{
 		assert(0<=x&&x<len);
-		return data[x];
+		return (x<64)?((lo>>x)&1):((hi>>(x-64))&1);
 	}
-	bool operator==(Word w)const{
-		return data==w.data&&len==w.len;
+	inline bool operator==(const Word &w)const{
+		return lo==w.lo&&hi==w.hi&&len==w.len;
 	}
-	bool operator!=(Word w)const{
+	inline bool operator!=(const Word &w)const{
 		return !(*this==w);
 	}
-	bool operator<(Word w)const{
-		return len!=w.len?len<w.len:data<w.data;
+	inline bool operator<(const Word &w)const{
+		return len!=w.len?len<w.len:(hi!=w.hi?hi<w.hi:lo<w.lo);
 	}
 	friend std::ostream &operator<<(std::ostream &os,Word w){
 		for(int64_t i=0;i<w.len;++i)os<<(int64_t)w.at(i);
 		return os;
 	}
-	size_t hash()const{
-		return std::hash<std::bitset<MAX_WORD_LENGTH>>()(data)+len*1237;
+	inline size_t hash()const{
+		uint64_t h=lo^(hi*0x9e3779b97f4a7c15ULL)^((uint64_t)len*0xbf58476d1ce4e5b9ULL);
+		h^=h>>30;
+		h*=0xbf58476d1ce4e5b9ULL;
+		h^=h>>27;
+		return (size_t)h;
 	}
-	int64_t size()const{
+	inline int64_t size()const{
 		return len;
 	}
-	bool operator!()const{
-		return !data.any();
+	inline bool operator!()const{
+		return (lo|hi)==0;
 	}
-	uint64_t to_u64()const{return data.to_ulong();}
+	inline uint64_t to_u64()const{return lo;}
 	
-	chr_t to_chr()const{
+	inline chr_t to_chr()const{
 		assert(len==log2_N_CHAR);
-		return data.to_ulong();
+		return (chr_t)lo;
 	}
-	Word at(int64_t x,int64_t n)const{
-		return pop(x*n).second.pop(n).first;
+	inline Word at(int64_t x,int64_t n)const{
+		int64_t shift=x*n;
+		unsigned __int128 d=(shift>=MAX_WORD_LENGTH)?0:(to_u128()>>shift);
+		unsigned __int128 mask=(n==0)?0:(((unsigned __int128)1<<n)-1);
+		return Word(d&mask,n);
 	}
-	Word del(int64_t x,int64_t n)const{
-		auto [w0,w1]=pop(x*n);
-		return w0+w1.pop(n).second;
+	inline Word del(int64_t x,int64_t n)const{
+		int64_t p=x*n;
+		unsigned __int128 d=to_u128();
+		unsigned __int128 lo_mask=(p==0)?0:(((unsigned __int128)1<<p)-1);
+		unsigned __int128 low=d&lo_mask;
+		unsigned __int128 high=(p+n>=MAX_WORD_LENGTH)?0:((d>>(p+n))<<p);
+		return Word(low|high,p+std::max<int64_t>(0L,len-p-n));
 	}
-	Word set_chr(int64_t x,chr_t y){
-		auto [w0,w1]=pop_chrs(x);
-		return w0+Word(y,log2_N_CHAR)+w1.pop_chrs(1).second;
+	inline Word set_chr(int64_t x,chr_t y)const{
+		if constexpr(log2_N_CHAR==1){
+			Word r=*this;
+			if(x<64){
+				if(y)r.lo|=(1ULL<<x);
+				else r.lo&=~(1ULL<<x);
+			}else{
+				if(y)r.hi|=(1ULL<<(x-64));
+				else r.hi&=~(1ULL<<(x-64));
+			}
+			return r;
+		}else{
+			int64_t shift=x*log2_N_CHAR;
+			unsigned __int128 mask=(((unsigned __int128)1<<log2_N_CHAR)-1)<<shift;
+			unsigned __int128 d=(to_u128()&~mask)|((unsigned __int128)(uint64_t)y<<shift);
+			return Word(d,len);
+		}
 	}
-	chr_t get_chr(int64_t x){
-		return at(x,log2_N_CHAR).to_chr();
+	inline chr_t get_chr(int64_t x)const{
+		if constexpr(log2_N_CHAR==1){
+			return (x<64)?((lo>>x)&1):((hi>>(x-64))&1);
+		}else{
+			return (chr_t)((to_u128()>>(x*log2_N_CHAR))&((1u<<log2_N_CHAR)-1));
+		}
 	}
-	std::pair<Word,Word> pop_chrs(int64_t n)const{
+	inline std::pair<Word,Word> pop_chrs(int64_t n)const{
 		return pop(n*log2_N_CHAR);
 	}
-	static Word from_chr(chr_t x){
-		return Word(x,log2_N_CHAR);
+	static inline Word from_chr(chr_t x){
+		return Word((uint64_t)x,0,log2_N_CHAR);
 	}
 };
 #endif
 
-Word rev(Word w){
+inline Word rev(Word w){
 	assert(w.len%log2_N_CHAR==0);
-	Word u(0,0);
-	while(w.len){
-		auto [w0,w1]=w.pop(log2_N_CHAR);
-		w=w1;
-		u=w0+u;
+	if(w.len<=log2_N_CHAR)return w;
+	unsigned __int128 src=w.to_u128(),dst=0;
+	unsigned __int128 mask=((unsigned __int128)1<<log2_N_CHAR)-1;
+	for(int64_t rem=w.len;rem>0;rem-=log2_N_CHAR){
+		dst=(dst<<log2_N_CHAR)|(src&mask);
+		src>>=log2_N_CHAR;
 	}
-	return u;
+	return Word(dst,w.len);
 }
 Word all0(int64_t len){
 	return Word(0,len*log2_N_CHAR);
@@ -591,34 +634,47 @@ void init(){
 	lru_n=1;
 	add_state_to_h=1;
 }
-Word upd(Word w1,Word w0,int64_t s,int64_t sgn){
-	//std::cerr<<"upd "<<w1<<" "<<w0<<" "<<s<<" "<<sgn<<'\n';
-	if(len_h){
-		//if(sgn==-1)w0=rev(w0);
-		if(add_state_to_h){
-			assert(0<=s&&s<N_STATE);
-			assert(w0.len%log2_N_CHAR==0);
-			w0=Word(s,log2_N_STATE)+(w0.len==log2_N_CHAR?w0:(Word(sgn==-1,1)+w0));
+inline Word upd(Word w1,Word w0,int64_t s,int64_t sgn){
+	if(!len_h)return w1;
+	if(add_state_to_h){
+		assert(0<=s&&s<N_STATE);
+		assert(w0.len%log2_N_CHAR==0);
+		if(w0.len==log2_N_CHAR){
+			w0=Word((uint64_t)s|((uint64_t)w0.lo<<log2_N_STATE),0,log2_N_STATE+log2_N_CHAR);
+		}else{
+			w0=Word(s,log2_N_STATE)+(Word(sgn==-1,1)+w0);
 		}
-		w1=w0+w1;
-		int64_t len=w0.len;
-		if(w1.len>len_h_no_lru*len){
-			w0=w1.at(len_h_no_lru,len);
-			for(int64_t i=len_h_no_lru+1,j=1;i*len<=w1.len;++i){
-				if(w1.at(i,len)==w0){
-					if(j<lru_n){
-						++j;
-						continue;
-					}
-					w1=w1.del(i,len);
-					break;
+	}
+	int64_t len=w0.len;
+	int64_t new_len=len+w1.len;
+	if(new_len>MAX_WORD_LENGTH)throw WordLenError();
+	unsigned __int128 d=w0.to_u128()|(w1.to_u128()<<len);
+	if(new_len>len_h_no_lru*len){
+		unsigned __int128 mask=((unsigned __int128)1<<len)-1;
+		int64_t shift0=len_h_no_lru*len;
+		unsigned __int128 target=(shift0>=MAX_WORD_LENGTH)?0:((d>>shift0)&mask);
+		for(int64_t i=len_h_no_lru+1,j=1,sh=(len_h_no_lru+1)*len;sh<=new_len;++i,sh+=len){
+			unsigned __int128 chunk=(sh>=MAX_WORD_LENGTH)?0:((d>>sh)&mask);
+			if(chunk==target){
+				if(j<lru_n){
+					++j;
+					continue;
 				}
+				unsigned __int128 lo_mask=(sh==0)?0:(((unsigned __int128)1<<sh)-1);
+				unsigned __int128 high=(sh+len>=MAX_WORD_LENGTH)?0:((d>>(sh+len))<<sh);
+				d=(d&lo_mask)|high;
+				new_len=sh+std::max<int64_t>(0L,new_len-sh-len);
+				break;
 			}
 		}
-		if(w1.len>len_h*len)w1=w1.pop(len_h*len).first;
 	}
-	//std::cerr<<"= "<<w1<<'\n';
-	return w1;
+	int64_t max_len=len_h*len;
+	if(new_len>max_len){
+		unsigned __int128 mask=(max_len==0)?0:(((unsigned __int128)1<<max_len)-1);
+		d&=mask;
+		new_len=max_len;
+	}
+	return Word(d,new_len);
 }
 
 }
@@ -698,6 +754,24 @@ struct Verifier{
 
 namespace MitM_CTL{
 thread_local bool CTL_skip_verify=0;
+inline size_t hash_combine_u64(size_t h,size_t k){
+	h^=k+0x9e3779b97f4a7c15ULL+(h<<6)+(h>>2);
+	return h;
+}
+inline size_t hash_word_vec(const std::vector<Word> &v){
+	size_t h=v.size()*0x9e3779b97f4a7c15ULL;
+	for(const auto &w:v)h=hash_combine_u64(h,w.hash());
+	return h;
+}
+inline size_t hash_word_pair_vec(const std::vector<std::pair<Word,Word>> &v){
+	size_t h=v.size()*0x9e3779b97f4a7c15ULL;
+	for(const auto &p:v){
+		h=hash_combine_u64(h,p.first.hash());
+		h=hash_combine_u64(h,p.second.hash());
+	}
+	return h;
+}
+
 
 struct LRUpair{
 	inline static thread_local int64_t len_h,len_h_no_lru,len_h_tail;
@@ -708,6 +782,12 @@ struct LRUpair{
 	std::vector<std::pair<Word,Word>> lru;
 	bool operator<(const LRUpair &w)const{
 		return q!=w.q?q<w.q:lru<w.lru;
+	}
+	bool operator==(const LRUpair &w)const{
+		return q==w.q&&lru==w.lru;
+	}
+	size_t hash()const{
+		return hash_combine_u64(hash_word_vec(q),hash_word_pair_vec(lru));
 	}
 	void push(Word w){
 		if(q.empty()&&!w)return;
@@ -736,6 +816,12 @@ struct set_pair{
 	std::vector<std::pair<Word,Word>> lru;
 	bool operator<(const set_pair &w)const{
 		return q!=w.q?q<w.q:lru<w.lru;
+	}
+	bool operator==(const set_pair &w)const{
+		return q==w.q&&lru==w.lru;
+	}
+	size_t hash()const{
+		return hash_combine_u64(hash_word_vec(q),hash_word_pair_vec(lru));
 	}
 	void push(Word w){
 		if(q.empty()&&!w)return;
@@ -767,6 +853,12 @@ struct NGset{
 	bool operator<(const NGset &w)const{
 		return q!=w.q?q<w.q:lru<w.lru;
 	}
+	bool operator==(const NGset &w)const{
+		return q==w.q&&lru==w.lru;
+	}
+	size_t hash()const{
+		return hash_combine_u64(q.hash(),hash_word_vec(lru));
+	}
 	void push(Word w){
 		if(!q.len&&!w)return;
 		auto q0=q;
@@ -792,20 +884,103 @@ struct NG{
 		tH=0;
 		pos_mod=1;
 	}
-	std::vector<Word> q,q0;
+	static constexpr int64_t INLINE_CAP=6;
+	Word q_buf[INLINE_CAP];
+	uint8_t q_sz=0;
+	bool use_ovf=false;
 	int64_t mod=0;
-	bool operator<(const NG &w)const{
-		return mod!=w.mod?mod<w.mod:q!=w.q?q<w.q:q0<w.q0;
+	std::vector<Word> q_ovf,q0;
+	NG()=default;
+	NG(const NG &o):q_sz(o.q_sz),use_ovf(o.use_ovf),mod(o.mod){
+		if(!use_ovf){
+			for(uint8_t i=0;i<q_sz;++i)q_buf[i]=o.q_buf[i];
+		}else{
+			q_ovf=o.q_ovf;
+		}
+		if(!o.q0.empty())q0=o.q0;
 	}
-	void push(Word w){
-		if(q.empty()&&!w)return;
-		if(q.size()==NG_n&&NG_n)q.erase(q.begin());
-		q.emplace_back(w);
-		if(q0.size()<tH)q0.emplace_back(w);
-		mod=(mod+1)%pos_mod;
+	NG(NG &&o)noexcept:q_sz(o.q_sz),use_ovf(o.use_ovf),mod(o.mod){
+		if(!use_ovf){
+			for(uint8_t i=0;i<q_sz;++i)q_buf[i]=o.q_buf[i];
+		}else{
+			q_ovf=std::move(o.q_ovf);
+		}
+		if(!o.q0.empty())q0=std::move(o.q0);
+	}
+	NG &operator=(const NG &o){
+		if(this==&o)return *this;
+		q_sz=o.q_sz;use_ovf=o.use_ovf;mod=o.mod;
+		if(!use_ovf){
+			for(uint8_t i=0;i<q_sz;++i)q_buf[i]=o.q_buf[i];
+			if(!q_ovf.empty())q_ovf.clear();
+		}else{
+			q_ovf=o.q_ovf;
+		}
+		if(!o.q0.empty()||!q0.empty())q0=o.q0;
+		return *this;
+	}
+	NG &operator=(NG &&o)noexcept{
+		if(this==&o)return *this;
+		q_sz=o.q_sz;use_ovf=o.use_ovf;mod=o.mod;
+		if(!use_ovf){
+			for(uint8_t i=0;i<q_sz;++i)q_buf[i]=o.q_buf[i];
+			if(!q_ovf.empty())q_ovf.clear();
+		}else{
+			q_ovf=std::move(o.q_ovf);
+		}
+		if(!o.q0.empty()||!q0.empty())q0=std::move(o.q0);
+		return *this;
+	}
+	inline bool operator==(const NG &w)const{
+		if(mod!=w.mod||use_ovf!=w.use_ovf)return false;
+		if(!use_ovf){
+			if(q_sz!=w.q_sz)return false;
+			for(uint8_t i=0;i<q_sz;++i)if(q_buf[i]!=w.q_buf[i])return false;
+		}else{
+			if(q_ovf!=w.q_ovf)return false;
+		}
+		return q0.empty()&&w.q0.empty()?true:(q0==w.q0);
+	}
+	inline size_t hash()const{
+		size_t h;
+		if(!use_ovf){
+			h=(size_t)q_sz*0x9e3779b97f4a7c15ULL;
+			for(uint8_t i=0;i<q_sz;++i)h=hash_combine_u64(h,q_buf[i].hash());
+		}else{
+			h=hash_word_vec(q_ovf);
+		}
+		if(!q0.empty())h=hash_combine_u64(h,hash_word_vec(q0));
+		if(mod)h=hash_combine_u64(h,(size_t)mod);
+		return h;
+	}
+	inline void push(const Word &w){
+		if(!use_ovf){
+			if(q_sz==0&&!w)return;
+			if(NG_n&&q_sz==(uint8_t)NG_n){
+				for(uint8_t i=1;i<q_sz;++i)q_buf[i-1]=q_buf[i];
+				q_buf[q_sz-1]=w;
+			}else if(q_sz<INLINE_CAP){
+				q_buf[q_sz++]=w;
+			}else{
+				use_ovf=true;
+				q_ovf.assign(q_buf,q_buf+q_sz);
+				q_ovf.emplace_back(w);
+			}
+		}else{
+			if(q_ovf.empty()&&!w)return;
+			if((int64_t)q_ovf.size()==NG_n&&NG_n)q_ovf.erase(q_ovf.begin());
+			q_ovf.emplace_back(w);
+		}
+		if(tH&&(int64_t)q0.size()<tH)q0.emplace_back(w);
+		if(pos_mod>1)mod=(mod+1)%pos_mod;
+		else mod=0;
 	}
 	friend std::ostream &operator<<(std::ostream &os,const NG &x){
-		return os<<x.q<<x.q0<<'_'<<x.mod;
+		if(!x.use_ovf){
+			std::vector<Word> tmp(x.q_buf,x.q_buf+x.q_sz);
+			return os<<tmp<<x.q0<<'_'<<x.mod;
+		}
+		return os<<x.q_ovf<<x.q0<<'_'<<x.mod;
 	}
 };
 
@@ -821,6 +996,17 @@ struct RWL_mod{
 	std::vector<RepeatWord> q;
 	bool operator<(const RWL_mod &w)const{
 		return q<w.q;
+	}
+	bool operator==(const RWL_mod &w)const{
+		return q==w.q;
+	}
+	size_t hash()const{
+		size_t h=q.size()*0x9e3779b97f4a7c15ULL;
+		for(const auto &[w0,n,m]:q){
+			h=hash_combine_u64(h,w0.hash());
+			h=hash_combine_u64(h,((size_t)(uint32_t)n<<32)|(uint32_t)m);
+		}
+		return h;
 	}
 	void push(Word w){
 		if(q.empty()){
@@ -857,6 +1043,12 @@ struct ExRWL{
 	std::vector<Word> q;
 	bool operator<(const ExRWL &w)const{
 		return q<w.q;
+	}
+	bool operator==(const ExRWL &w)const{
+		return q==w.q;
+	}
+	size_t hash()const{
+		return hash_word_vec(q);
 	}
 	void push(Word w){
 		if(q.empty()&&!w)return;
@@ -905,6 +1097,12 @@ struct CPS_LRU{
 	bool operator<(const CPS_LRU &w)const{
 		return ls_<w.ls_;
 	}
+	bool operator==(const CPS_LRU &w)const{
+		return ls_==w.ls_;
+	}
+	size_t hash()const{
+		return hash_word_vec(ls_);
+	}
 	void push(Word w){
 		if(ls_.empty()&&!w)return;
 		ls_.insert(ls_.begin(),w);
@@ -925,32 +1123,123 @@ struct CPS_LRU{
 template<class DFA_state_t>
 struct Decider{
 	typedef std::tuple<size_t,size_t,int64_t,int64_t> Tape;
+	struct QItem{
+		uint32_t l,r;
+		int8_t s,sgn;
+	};
+	struct PushEntry{
+		uint64_t lo,hi;
+		int32_t wlen;
+		uint32_t ls;
+		uint32_t val;
+		uint32_t gen;
+	};
+	struct IdSlot{
+		uint32_t gen;
+		uint32_t idx;
+	};
 	struct DFA{
-		std::map<DFA_state_t,size_t> id;
-		std::vector<const DFA_state_t*> idr;
+		std::vector<DFA_state_t> states;
+		std::vector<IdSlot> id_buckets;
+		size_t id_mask=0;
 
 		std::vector<std::vector<std::pair<Word,size_t>>> pop_;
-		std::map<std::pair<Word,size_t>,size_t> push_;
-		
+		size_t pop_used=0;
+
+		std::vector<PushEntry> push_tab;
+		size_t push_mask=0;
+		size_t push_cnt=0;
+		uint32_t cur_gen=0;
+
 		size_t n_upd=0;
 		bool upd_flag=0;
 		std::vector<std::pair<size_t,std::pair<Word,size_t>>> upds;
-		size_t push(Word w,size_t ls){
-			auto &ret=push_[{w,ls}];
-			if(!ret){
-				auto ls_=*idr[ls];
-				ls_.push(w);
-				auto ls0=get_id(ls_);
-				ret=ls0;
-				if(pop_.size()<=ls0)pop_.resize(ls0+1);
-				pop_[ls0].emplace_back(w,ls);
-				upd_flag=1;
-				++n_upd;
-				upds.emplace_back(ls0,std::make_pair(w,ls));
-			}
-			return ret;
+
+		static inline size_t hash_push(const Word &w,size_t ls){
+			size_t h=w.hash()^(ls*0x9e3779b97f4a7c15ULL);
+			h^=h>>30;
+			h*=0xbf58476d1ce4e5b9ULL;
+			h^=h>>27;
+			return h;
 		}
-		size_t push_all(std::vector<chr_t> w,size_t ls,size_t len){
+		void rehash_id(size_t new_cap){
+			id_buckets.assign(new_cap,IdSlot{0,0});
+			id_mask=new_cap-1;
+			uint32_t g=cur_gen;
+			for(size_t i=1;i<states.size();++i){
+				size_t p=states[i].hash()&id_mask;
+				while(id_buckets[p].gen==g)p=(p+1)&id_mask;
+				id_buckets[p]=IdSlot{g,(uint32_t)i};
+			}
+		}
+		void rehash_push(size_t new_cap){
+			std::vector<PushEntry> nt(new_cap,PushEntry{0,0,0,0,0,0});
+			size_t nmask=new_cap-1;
+			uint32_t g=cur_gen;
+			for(const auto &e:push_tab){
+				if(e.gen!=g)continue;
+				Word w(e.lo,e.hi,e.wlen);
+				size_t p=hash_push(w,e.ls)&nmask;
+				while(nt[p].gen==g)p=(p+1)&nmask;
+				nt[p]=e;
+			}
+			push_tab.swap(nt);
+			push_mask=nmask;
+		}
+		inline void reset(){
+			states.clear();
+			++cur_gen;
+			if(cur_gen==0){
+				cur_gen=1;
+				id_buckets.assign(128,IdSlot{0,0});
+				push_tab.assign(256,PushEntry{0,0,0,0,0,0});
+			}else{
+				if(id_buckets.empty()||id_buckets.size()>4096)id_buckets.assign(128,IdSlot{0,0});
+				if(push_tab.empty()||push_tab.size()>8192)push_tab.assign(256,PushEntry{0,0,0,0,0,0});
+			}
+			id_mask=id_buckets.size()-1;
+			push_mask=push_tab.size()-1;
+
+			for(size_t i=0;i<pop_used;++i)pop_[i].clear();
+			pop_used=0;
+
+			push_cnt=0;
+			n_upd=0;
+			upd_flag=0;
+			upds.clear();
+		}
+		inline size_t push(const Word &w,size_t ls){
+			if((push_cnt+1)*2>=push_tab.size())rehash_push(push_tab.size()*2);
+			uint32_t g=cur_gen;
+			size_t p=hash_push(w,ls)&push_mask;
+			for(;;){
+				auto &e=push_tab[p];
+				if(e.gen!=g){
+					DFA_state_t ls_=states[ls];
+					ls_.push(w);
+					size_t ls0=get_id(std::move(ls_));
+					e.lo=w.lo;
+					e.hi=w.hi;
+					e.wlen=(int32_t)w.len;
+					e.ls=(uint32_t)ls;
+					e.val=(uint32_t)ls0;
+					e.gen=g;
+					++push_cnt;
+					if(ls0>=pop_.size())pop_.resize(ls0+1);
+					if(ls0+1>pop_used)pop_used=ls0+1;
+					pop_[ls0].emplace_back(w,ls);
+					upd_flag=1;
+					++n_upd;
+					upds.emplace_back(ls0,std::make_pair(w,ls));
+					return ls0;
+				}
+				if(e.ls==(uint32_t)ls&&e.lo==w.lo&&e.hi==w.hi&&e.wlen==(int32_t)w.len)return e.val;
+				p=(p+1)&push_mask;
+			}
+		}
+		size_t push_all(const std::vector<chr_t> &w_in,size_t ls,size_t len){
+			if(w_in.empty())return ls;
+			std::vector<chr_t> w=w_in;
 			std::reverse(w.begin(),w.end());
 			while(w.size()%len)w.emplace_back(0);
 			std::reverse(w.begin(),w.end());
@@ -965,79 +1254,134 @@ struct Decider{
 			}
 			return ls;
 		}
-		
-		size_t get_id(const DFA_state_t &ls){
-			auto [it,flag]=id.emplace(ls,idr.size());
-			if(flag)idr.emplace_back(&it->first);
-			return it->second;
+		inline size_t get_id(DFA_state_t &&ls){
+			if(states.size()*2>=id_buckets.size())rehash_id(id_buckets.size()*2);
+			uint32_t g=cur_gen;
+			size_t h=ls.hash();
+			size_t p=h&id_mask;
+			for(;;){
+				IdSlot sl=id_buckets[p];
+				if(sl.gen!=g){
+					size_t nid=states.size();
+					states.emplace_back(std::move(ls));
+					id_buckets[p]=IdSlot{g,(uint32_t)nid};
+					return nid;
+				}
+				if(states[sl.idx]==ls)return sl.idx;
+				p=(p+1)&id_mask;
+			}
 		}
-		void init(size_t len){
-			assert(idr.empty());
-			idr.emplace_back();
-			auto id0=get_id({}),id1=id0;
+		inline void init(size_t len){
+			reset();
+			states.emplace_back();
+			auto id0=get_id(DFA_state_t{}),id1=id0;
 			do id1=push(all0(len),id1); while(id1!=id0);
 		}
+		std::map<std::pair<Word,size_t>,size_t> to_push_map()const{
+			std::map<std::pair<Word,size_t>,size_t> mp;
+			uint32_t g=cur_gen;
+			for(const auto &e:push_tab){
+				if(e.gen==g)mp[{Word(e.lo,e.hi,e.wlen),e.ls}]=e.val;
+			}
+			return mp;
+		}
 		friend std::ostream &operator<<(std::ostream &os,const DFA &x){
-			for(size_t i=1;i<x.idr.size();++i){
-				merr<<*x.idr.at(i)<<":\n";
-				if(i<x.pop_.size())
+			for(size_t i=1;i<x.states.size();++i){
+				merr<<x.states.at(i)<<":\n";
+				if(i<x.pop_used)
 				for(auto [w,r1]:x.pop_[i]){
-					merr<<w<<" => "<<*x.idr.at(r1)<<'\n';
+					merr<<w<<" => "<<x.states.at(r1)<<'\n';
 				}
 			}
 			return os;
 		}
 	}lset,rset;
-	std::deque<Tape> q;
-	//std::set<Tape> inq;
+	std::vector<QItem> q;
 	int64_t used_T=0;
 	
 	size_t len=1;
 	
-	std::vector<std::set<Tape>> inqs[2];
-	void push(Tape t){
-		auto [l,r,s,sgn]=t;
-		auto &vec=inqs[sgn==1?1:0];
-		if(vec.size()<=r)vec.resize(r+1);
-		if(vec[r].insert(t).second)q.push_back(t);
+	std::vector<std::vector<uint64_t>> inqs[2];
+	size_t inqs_used[2]={0,0};
+	std::vector<uint64_t> tmp_ts;
+
+	inline void reset_decider(){
+		q.clear();
+		used_T=0;
+		for(int side=0;side<2;++side){
+			for(size_t i=0;i<inqs_used[side];++i)inqs[side][i].clear();
+			inqs_used[side]=0;
+		}
+	}
+	inline void push(QItem t){
+		int side=(t.sgn==1?1:0);
+		auto &vec=inqs[side];
+		if(t.r>=vec.size())vec.resize(t.r+1);
+		if((size_t)t.r+1>inqs_used[side])inqs_used[side]=(size_t)t.r+1;
+		uint64_t key=((uint64_t)t.l<<8)|(uint64_t)(uint8_t)t.s;
+		auto &v=vec[t.r];
+		auto it=std::lower_bound(v.begin(),v.end(),key);
+		if(it==v.end()||*it!=key){
+			v.insert(it,key);
+			q.push_back(t);
+		}
 	}
 	
-	void print_Tape(Tape t){
-		auto [l,r,s,sgn]=t;
+	void print_Tape(QItem t){
+		size_t l=t.l,r=t.r;
+		int64_t s=t.s,sgn=t.sgn;
 		if(sgn==-1)std::swap(l,r);
-		merr<<*lset.idr.at(l);
+		merr<<lset.states.at(l);
 		merr<<" ";
 		if(sgn==-1)merr<<"<";
 		merr<<char('A'+s);
 		if(sgn==1)merr<<">";
 		merr<<" ";
-		merr<<*rset.idr.at(r);
+		merr<<rset.states.at(r);
 	}
 	#define dbg1 dbg
-	std::optional<Tape> step(const TM &tm,Tape t,std::pair<Word,size_t> rs){
-		auto [l,r,s,sgn]=t;
+	inline bool step(const TM &tm,QItem t,const std::pair<Word,size_t> &rs,QItem &out_t){
 		if(dbg){
 			merr<<"step: ";
 			print_Tape(t);
 			merr<<"\n";
 		}
-		auto [w,r1]=rs;
+		const auto &[w,r1]=rs;
+		int64_t s=t.s,sgn=t.sgn;
+		if(len==1){
+			chr_t in=w.get_chr(0);
+			const Trans &tr=tm.trans[s][in];
+			if(tr.nxt==-1){
+				if(dbg1)merr<<w<<" may halt\n"<<used_T<<'\n';
+				return false;
+			}
+			Word w1(w.to_u128()>>log2_N_CHAR,std::max<int64_t>(0L,w.len-log2_N_CHAR));
+			if(ChrTransform::len_h)w1=upd(w1,Word::from_chr(in),s,sgn);
+			Word out_w=Word::from_chr(tr.out)+w1;
+			if(tr.dir*sgn<0){
+				out_t=QItem{(uint32_t)(sgn==1?rset:lset).push(out_w,r1),t.l,(int8_t)tr.nxt,(int8_t)(-sgn)};
+			}else{
+				out_t=QItem{(uint32_t)(sgn==1?lset:rset).push(out_w,t.l),(uint32_t)r1,(int8_t)tr.nxt,(int8_t)sgn};
+			}
+			return true;
+		}
 		auto [w0,w1]=w.pop_chrs(len);
 		auto res=WordUpdateLemma::from(tm,w0,s,sgn);
 		if(!res){
 			if(dbg1)merr<<w0<<char('A'+s)<<sgn<<"block timeout\n"<<used_T<<'\n';
-			return std::nullopt;
+			return false;
 		}
 		if(res->s1==-1){
 			if(dbg1)merr<<*res<<"may halt\n"<<used_T<<'\n';
-			return std::nullopt;
+			return false;
 		}
 		w1=upd(w1,w0,s,sgn);
 		if(res->is_back){
-			return Tape{(sgn==1?rset:lset).push(res->w1+w1,r1),l,res->s1,-sgn};
+			out_t=QItem{(uint32_t)(sgn==1?rset:lset).push(res->w1+w1,r1),t.l,(int8_t)res->s1,(int8_t)(-sgn)};
 		}else{
-			return Tape{(sgn==1?lset:rset).push(rev(res->w1)+w1,l),r1,res->s1,sgn};
+			out_t=QItem{(uint32_t)(sgn==1?lset:rset).push(rev(res->w1)+w1,t.l),(uint32_t)r1,(int8_t)res->s1,(int8_t)sgn};
 		}
+		return true;
 	}
 	int64_t decide(const TM &tm,int64_t maxT,const DH_Tape &tape0){
 		try{
@@ -1047,54 +1391,62 @@ struct Decider{
 		}
 	}
 	int64_t decide_(const TM &tm,int64_t maxT,const DH_Tape &tape0){
+		reset_decider();
 		lset.init(len);
 		rset.init(len);
 		auto l1=lset.push_all((tape0.sgn==1?tape0.l:tape0.r),1,len);
 		auto r1=rset.push_all((tape0.sgn==1?tape0.r:tape0.l),1,len);
 		if(tape0.sgn==-1)std::swap(l1,r1);
-		push(Tape{l1,r1,tape0.s,tape0.sgn});
-		std::vector<std::pair<Word,size_t>> tmp_rs;
-		std::vector<Tape> tmp_ts;
+		push(QItem{(uint32_t)l1,(uint32_t)r1,(int8_t)tape0.s,(int8_t)tape0.sgn});
+		QItem t0;
 		for(;;){
 			if(!q.empty()){
-				Tape t=q.back();
+				QItem t=q.back();
 				q.pop_back();
-				auto [l,r,s,sgn]=t;
-				auto &pvec=(sgn==1?rset:lset).pop_;
-				if(r<pvec.size()){
-					tmp_rs.assign(pvec[r].begin(),pvec[r].end());
-					for(const auto &rs0:tmp_rs){
-						auto t0=step(tm,t,rs0);
-						if(!t0)return 0;
-						push(*t0);
+				auto &d=(t.sgn==1?rset:lset);
+				if(t.r<d.pop_used){
+					size_t sz=d.pop_[t.r].size();
+					for(size_t i=0;i<sz;++i){
+						auto rs0=d.pop_[t.r][i];
+						if(!step(tm,t,rs0,t0))return 0;
+						push(t0);
 					}
 				}
 			}else if(!lset.upds.empty()){
 				auto [id0,rs0]=lset.upds.back();
 				lset.upds.pop_back();
-				if(id0<inqs[0].size()&&!inqs[0][id0].empty()){
+				if(id0<inqs_used[0]&&!inqs[0][id0].empty()){
 					tmp_ts.assign(inqs[0][id0].begin(),inqs[0][id0].end());
-					for(const auto &t:tmp_ts){
-						auto t0=step(tm,t,rs0);
-						if(!t0)return 0;
-						push(*t0);
+					for(uint64_t key:tmp_ts){
+						QItem t{(uint32_t)(key>>8),(uint32_t)id0,(int8_t)(key&0xFF),-1};
+						if(!step(tm,t,rs0,t0))return 0;
+						push(t0);
 					}
 				}
 			}else if(!rset.upds.empty()){
 				auto [id0,rs0]=rset.upds.back();
 				rset.upds.pop_back();
-				if(id0<inqs[1].size()&&!inqs[1][id0].empty()){
+				if(id0<inqs_used[1]&&!inqs[1][id0].empty()){
 					tmp_ts.assign(inqs[1][id0].begin(),inqs[1][id0].end());
-					for(const auto &t:tmp_ts){
-						auto t0=step(tm,t,rs0);
-						if(!t0)return 0;
-						push(*t0);
+					for(uint64_t key:tmp_ts){
+						QItem t{(uint32_t)(key>>8),(uint32_t)id0,(int8_t)(key&0xFF),1};
+						if(!step(tm,t,rs0,t0))return 0;
+						push(t0);
 					}
 				}
 			}else{
-				std::set<Tape> inq;
-				for(int side=0;side<2;++side)for(const auto &v:inqs[side])for(const auto &t:v)inq.insert(t);
-				assert(CTL_skip_verify||CTL_Fixedlen_verify::Verifier(lset.push_,rset.push_,inq,1,1).verify(tm,len,tape0));
+				if(!CTL_skip_verify){
+					std::set<Tape> inq;
+					for(int side=0;side<2;++side){
+						int64_t sg=(side==1?1:-1);
+						for(size_t r=0;r<inqs_used[side];++r){
+							for(uint64_t key:inqs[side][r]){
+								inq.insert(Tape{(size_t)(key>>8),r,(int64_t)(key&0xFF),sg});
+							}
+						}
+					}
+					assert(CTL_Fixedlen_verify::Verifier(lset.to_push_map(),rset.to_push_map(),inq,1,1).verify(tm,len,tape0));
+				}
 				if(dbg1)std::cerr<<'\n'<<tm<<" N"<<" T:"<<used_T<<'\n';
 				return 2;
 			}
@@ -2034,6 +2386,415 @@ int main_ucb(int argc,char **argv){
 }
 
 
+struct Decider64{
+	static constexpr uint64_t WORD_MASK=(1ULL<<57)-1;
+	struct NG64{
+		uint64_t a,b,c;
+		inline bool operator==(const NG64 &o)const{return a==o.a&&b==o.b&&c==o.c;}
+		inline size_t hash()const{
+			uint64_t h=a^(b*0x9e3779b97f4a7c15ULL)^(c*0xbf58476d1ce4e5b9ULL);
+			h^=h>>30;h*=0xbf58476d1ce4e5b9ULL;h^=h>>27;
+			return (size_t)h;
+		}
+		inline void push(uint64_t w,size_t ng_n){
+			if(a==0&&((w&WORD_MASK)==0))return;
+			if(ng_n==1){a=w;}
+			else if(ng_n==2){if(a==0)a=w;else if(b==0)b=w;else{a=b;b=w;}}
+			else{if(a==0)a=w;else if(b==0)b=w;else if(c==0)c=w;else{a=b;b=c;c=w;}}
+		}
+	};
+	struct PushEntry64{
+		uint64_t w;
+		uint32_t ls_val; // (ls<<16)|val
+		uint32_t gen;
+	};
+	struct IdSlot{
+		uint32_t gen;
+		uint32_t idx;
+	};
+	struct PopEdge{
+		uint64_t w;
+		uint32_t r1;
+	};
+	struct UpdEdge{
+		uint64_t w;
+		uint32_t id0;
+		uint32_t r1;
+	};
+	struct QItem{
+		uint32_t l,r;
+		int8_t s,sgn;
+	};
+	struct DFA64{
+		std::vector<NG64> states;
+		std::vector<IdSlot> id_buckets;
+		size_t id_mask=0;
+		std::vector<std::vector<PopEdge>> pop_;
+		size_t pop_used=0;
+		std::vector<PushEntry64> push_tab;
+		size_t push_mask=0;
+		size_t push_cnt=0;
+		uint32_t cur_gen=0;
+		size_t n_upd=0;
+		std::vector<UpdEdge> upds;
+
+		static inline size_t hash_push(uint64_t w,uint32_t ls){
+			uint64_t h=w^((uint64_t)ls*0x9e3779b97f4a7c15ULL);
+			h^=h>>30;h*=0xbf58476d1ce4e5b9ULL;h^=h>>27;
+			return (size_t)h;
+		}
+		void rehash_id(size_t new_cap){
+			id_buckets.assign(new_cap,IdSlot{0,0});
+			id_mask=new_cap-1;
+			uint32_t g=cur_gen;
+			for(size_t i=1;i<states.size();++i){
+				size_t p=states[i].hash()&id_mask;
+				while(id_buckets[p].gen==g)p=(p+1)&id_mask;
+				id_buckets[p]=IdSlot{g,(uint32_t)i};
+			}
+		}
+		void rehash_push(size_t new_cap){
+			std::vector<PushEntry64> nt(new_cap,PushEntry64{0,0,0});
+			size_t nmask=new_cap-1;
+			uint32_t g=cur_gen;
+			for(const auto &e:push_tab){
+				if(e.gen!=g)continue;
+				size_t p=hash_push(e.w,e.ls_val>>16)&nmask;
+				while(nt[p].gen==g)p=(p+1)&nmask;
+				nt[p]=e;
+			}
+			push_tab.swap(nt);
+			push_mask=nmask;
+		}
+		inline void init(size_t ng_n){
+			states.clear();
+			++cur_gen;
+			if(cur_gen==0){
+				cur_gen=1;
+				id_buckets.assign(256,IdSlot{0,0});
+				push_tab.assign(512,PushEntry64{0,0,0});
+			}else{
+				if(id_buckets.empty()||id_buckets.size()>8192)id_buckets.assign(256,IdSlot{0,0});
+				if(push_tab.empty()||push_tab.size()>16384)push_tab.assign(512,PushEntry64{0,0,0});
+			}
+			id_mask=id_buckets.size()-1;
+			push_mask=push_tab.size()-1;
+			for(size_t i=0;i<pop_used;++i)pop_[i].clear();
+			pop_used=0;
+			push_cnt=0;
+			n_upd=0;
+			upds.clear();
+			states.push_back(NG64{0,0,0});
+			uint32_t id0=get_id(NG64{0,0,0}),id1=id0;
+			uint64_t w0=(1ULL<<57);
+			do id1=push(w0,id1,ng_n); while(id1!=id0);
+		}
+		inline uint32_t get_id(const NG64 &ls){
+			if(states.size()*2>=id_buckets.size())rehash_id(id_buckets.size()*2);
+			uint32_t g=cur_gen;
+			size_t p=ls.hash()&id_mask;
+			for(;;){
+				IdSlot sl=id_buckets[p];
+				if(sl.gen!=g){
+					uint32_t nid=(uint32_t)states.size();
+					states.push_back(ls);
+					id_buckets[p]=IdSlot{g,nid};
+					return nid;
+				}
+				if(states[sl.idx]==ls)return sl.idx;
+				p=(p+1)&id_mask;
+			}
+		}
+		inline uint32_t push(uint64_t w,uint32_t ls,size_t ng_n){
+			if((push_cnt+1)*2>=push_tab.size())rehash_push(push_tab.size()*2);
+			uint32_t g=cur_gen;
+			size_t p=hash_push(w,ls)&push_mask;
+			for(;;){
+				auto &e=push_tab[p];
+				if(e.gen!=g){
+					NG64 ls_=states[ls];
+					ls_.push(w,ng_n);
+					uint32_t ls0=get_id(ls_);
+					e.w=w;
+					e.ls_val=(ls<<16)|ls0;
+					e.gen=g;
+					++push_cnt;
+					if(ls0>=pop_.size())pop_.resize(ls0+1);
+					if((size_t)ls0+1>pop_used)pop_used=(size_t)ls0+1;
+					pop_[ls0].push_back(PopEdge{w,ls});
+					++n_upd;
+					upds.push_back(UpdEdge{w,ls0,ls});
+					return ls0;
+				}
+				if(e.w==w&&(e.ls_val>>16)==ls)return e.ls_val&0xFFFFu;
+				p=(p+1)&push_mask;
+			}
+		}
+	}lset,rset;
+	std::vector<QItem> q;
+	std::vector<std::vector<uint64_t>> inqs[2];
+	size_t inqs_used[2]={0,0};
+	std::vector<uint64_t> tmp_ts;
+
+	inline void push_q(QItem t){
+		int side=(t.sgn==1?1:0);
+		auto &vec=inqs[side];
+		if(t.r>=vec.size())vec.resize(t.r+1);
+		if((size_t)t.r+1>inqs_used[side])inqs_used[side]=(size_t)t.r+1;
+		uint64_t key=((uint64_t)t.l<<8)|(uint64_t)(uint8_t)t.s;
+		auto &v=vec[t.r];
+		auto it=std::lower_bound(v.begin(),v.end(),key);
+		if(it==v.end()||*it!=key){
+			v.insert(it,key);
+			q.push_back(t);
+		}
+	}
+	static inline uint64_t upd64(uint64_t w,int64_t s,int64_t len_h,int64_t len_h_no_lru,uint8_t out_bit){
+		int64_t w_len=(int64_t)(w>>57);
+		uint64_t w_bits=w&WORD_MASK;
+		uint64_t in=w_bits&1ULL;
+		uint64_t w1_bits=w_bits>>1;
+		int64_t w1_len=w_len-1;
+		uint64_t w0_bits=(uint64_t)s|(in<<3);
+		uint64_t d=w0_bits|(w1_bits<<4);
+		int64_t new_len=4+w1_len;
+		int64_t sh0=len_h_no_lru*4;
+		if(new_len>sh0){
+			uint64_t target=(d>>sh0)&0xFULL;
+			for(int64_t sh=sh0+4;sh<=new_len;sh+=4){
+				if(((d>>sh)&0xFULL)==target){
+					uint64_t lo_mask=(1ULL<<sh)-1;
+					uint64_t high=(sh+4>=64)?0ULL:((d>>(sh+4))<<sh);
+					d=(d&lo_mask)|high;
+					new_len=sh+(new_len>sh+4?new_len-sh-4:0);
+					break;
+				}
+			}
+		}
+		int64_t max_len=len_h*4;
+		if(new_len>max_len){
+			d&=(1ULL<<max_len)-1;
+			new_len=max_len;
+		}
+		return ((uint64_t)(new_len+1)<<57)|(uint64_t)out_bit|(d<<1);
+	}
+	int64_t decide(const TM &tm,int64_t len_h,int64_t len_h_no_lru,int64_t maxT,size_t ng_n){
+		q.clear();
+		for(int side=0;side<2;++side){
+			for(size_t i=0;i<inqs_used[side];++i)inqs[side][i].clear();
+			inqs_used[side]=0;
+		}
+		lset.init(ng_n);
+		rset.init(ng_n);
+		push_q(QItem{1,1,0,1});
+		int64_t used_T=0;
+		for(;;){
+			if(!q.empty()){
+				QItem t=q.back();
+				q.pop_back();
+				auto &d=(t.sgn==1?rset:lset);
+				auto &o=(t.sgn==1?lset:rset);
+				if(t.r<d.pop_used){
+					size_t sz=d.pop_[t.r].size();
+					for(size_t i=0;i<sz;++i){
+						PopEdge pe=d.pop_[t.r][i];
+						const Trans &tr=tm.trans[t.s][pe.w&1ULL];
+						if(tr.nxt==-1)return 0;
+						uint64_t out_w=upd64(pe.w,t.s,len_h,len_h_no_lru,(uint8_t)tr.out);
+						if(tr.dir*t.sgn<0){
+							uint32_t nl=d.push(out_w,pe.r1,ng_n);
+							push_q(QItem{nl,t.l,tr.nxt,(int8_t)(-t.sgn)});
+						}else{
+							uint32_t nl=o.push(out_w,t.l,ng_n);
+							push_q(QItem{nl,pe.r1,tr.nxt,t.sgn});
+						}
+					}
+				}
+			}else if(!lset.upds.empty()){
+				UpdEdge ue=lset.upds.back();
+				lset.upds.pop_back();
+				if(ue.id0<inqs_used[0]&&!inqs[0][ue.id0].empty()){
+					tmp_ts.assign(inqs[0][ue.id0].begin(),inqs[0][ue.id0].end());
+					for(uint64_t key:tmp_ts){
+						uint32_t l=(uint32_t)(key>>8);
+						int8_t s=(int8_t)(key&0xFF);
+						const Trans &tr=tm.trans[s][ue.w&1ULL];
+						if(tr.nxt==-1)return 0;
+						uint64_t out_w=upd64(ue.w,s,len_h,len_h_no_lru,(uint8_t)tr.out);
+						if(tr.dir>0){
+							uint32_t nl=lset.push(out_w,ue.r1,ng_n);
+							push_q(QItem{nl,l,tr.nxt,1});
+						}else{
+							uint32_t nl=rset.push(out_w,l,ng_n);
+							push_q(QItem{nl,ue.r1,tr.nxt,-1});
+						}
+					}
+				}
+			}else if(!rset.upds.empty()){
+				UpdEdge ue=rset.upds.back();
+				rset.upds.pop_back();
+				if(ue.id0<inqs_used[1]&&!inqs[1][ue.id0].empty()){
+					tmp_ts.assign(inqs[1][ue.id0].begin(),inqs[1][ue.id0].end());
+					for(uint64_t key:tmp_ts){
+						uint32_t l=(uint32_t)(key>>8);
+						int8_t s=(int8_t)(key&0xFF);
+						const Trans &tr=tm.trans[s][ue.w&1ULL];
+						if(tr.nxt==-1)return 0;
+						uint64_t out_w=upd64(ue.w,s,len_h,len_h_no_lru,(uint8_t)tr.out);
+						if(tr.dir<0){
+							uint32_t nl=rset.push(out_w,ue.r1,ng_n);
+							push_q(QItem{nl,l,tr.nxt,-1});
+						}else{
+							uint32_t nl=lset.push(out_w,l,ng_n);
+							push_q(QItem{nl,ue.r1,tr.nxt,1});
+						}
+					}
+				}
+			}else{
+				return 2;
+			}
+			++used_T;
+			if(used_T+(int64_t)(q.size()+lset.upds.size()+rset.upds.size())>=maxT)return 0;
+			if((int64_t)(lset.n_upd+rset.n_upd)>=maxT)return 0;
+		}
+	}
+};
+
+struct FastTape{
+	static constexpr int64_t STACK_RADIUS=304;
+	static constexpr int64_t STACK_SIZE=STACK_RADIUS*2+8;
+	uint8_t stack_tape[STACK_SIZE];
+	uint8_t stack_h[304];
+	int64_t head=STACK_RADIUS,min_pos=STACK_RADIUS,max_pos=STACK_RADIUS;
+	int64_t s=0,last_s=0,last_in=0,steps=0;
+	inline bool run_first_50(const TM &tm){
+		memset(stack_tape+STACK_RADIUS-50,0,101);
+		uint8_t * __restrict tp=stack_tape;
+		uint8_t * __restrict hp=stack_h;
+		int64_t hd=STACK_RADIUS,mn=STACK_RADIUS,mx=STACK_RADIUS,st=0,ls=0,li=0;
+		for(int64_t i=0;i<50;++i){
+			if(st==-1){
+				head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=i;
+				return true;
+			}
+			uint8_t in=tp[hd];
+			hp[i]=(uint8_t)(((st*N_CHAR+in)*2+(hd==mn))*2+(hd==mx));
+			const Trans &tr=tm.trans[st][in];
+			ls=st;li=in;st=tr.nxt;
+			tp[hd]=(uint8_t)tr.out;
+			hd+=tr.dir;
+			if(hd<mn)mn=hd;
+			if(hd>mx)mx=hd;
+		}
+		head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=50;
+		return false;
+	}
+	inline bool run_next_250(const TM &tm){
+		memset(stack_tape+STACK_RADIUS-300,0,250);
+		memset(stack_tape+STACK_RADIUS+51,0,250);
+		uint8_t * __restrict tp=stack_tape;
+		uint8_t * __restrict hp=stack_h+50;
+		int64_t hd=head,mn=min_pos,mx=max_pos,st=s,ls=last_s,li=last_in;
+		for(int64_t i=0;i<250;++i){
+			if(st==-1){
+				head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=50+i;
+				return true;
+			}
+			uint8_t in=tp[hd];
+			hp[i]=(uint8_t)(((st*N_CHAR+in)*2+(hd==mn))*2+(hd==mx));
+			const Trans &tr=tm.trans[st][in];
+			ls=st;li=in;st=tr.nxt;
+			tp[hd]=(uint8_t)tr.out;
+			hd+=tr.dir;
+			if(hd<mn)mn=hd;
+			if(hd>mx)mx=hd;
+		}
+		head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=300;
+		return false;
+	}
+	static inline bool check_tc_buf(const uint8_t * __restrict hp,int64_t N,int64_t span){
+		if(span>=N*8)return false;
+		int64_t T=N-1;
+		uint8_t hT=hp[T];
+		uint8_t hT1=hp[T-1];
+		for(int64_t d=1;T-d*2>=0;++d){
+			if(hp[T-d]!=hT||hp[T-d*2]!=hT)continue;
+			if(d>1){
+				if(hp[T-1-d]!=hT1)continue;
+				if(d>2&&memcmp(hp+T-d+1,hp+T-d*2+1,(size_t)(d-2)))continue;
+			}
+			int64_t p=T-d*2;
+			for(;;){
+				if(hp[p-1+d]&3)return true;
+				if(!(p>0&&hp[p-1]==hp[p-1+d]))break;
+				--p;
+			}
+		}
+		return false;
+	}
+	inline bool check_tc(int64_t N)const{
+		return check_tc_buf(stack_h,N,max_pos-min_pos);
+	}
+};
+struct LongTape{
+	std::vector<uint8_t> tape;
+	std::vector<uint8_t> h;
+	int64_t head,min_pos,max_pos,s,last_s,last_in,steps;
+	explicit LongTape(const FastTape &ft){
+		int64_t init_rad=3200;
+		tape.assign(init_rad*2+16,0);
+		int64_t shift=init_rad-ft.head;
+		memcpy(tape.data()+ft.min_pos+shift,ft.stack_tape+ft.min_pos,(size_t)(ft.max_pos-ft.min_pos+1));
+		head=ft.head+shift;min_pos=ft.min_pos+shift;max_pos=ft.max_pos+shift;
+		s=ft.s;last_s=ft.last_s;last_in=ft.last_in;steps=ft.steps;
+		h.resize(3008);
+		memcpy(h.data(),ft.stack_h,(size_t)steps);
+	}
+	void ensure_capacity(int64_t add_steps,bool record_h){
+		int64_t need_steps=steps+add_steps;
+		if(head-add_steps-2<0||head+add_steps+2>=(int64_t)tape.size()){
+			int64_t new_rad=need_steps+64;
+			std::vector<uint8_t> nt(new_rad*2+16,0);
+			int64_t shift=new_rad-head;
+			memcpy(nt.data()+min_pos+shift,tape.data()+min_pos,(size_t)(max_pos-min_pos+1));
+			head+=shift;min_pos+=shift;max_pos+=shift;
+			tape.swap(nt);
+		}
+		if(record_h&&need_steps>(int64_t)h.size()){
+			h.resize(need_steps);
+		}
+	}
+	template<bool RecordH>
+	bool run_steps(const TM &tm,int64_t n){
+		ensure_capacity(n,RecordH);
+		uint8_t * __restrict tp=tape.data();
+		uint8_t * __restrict hp=h.data();
+		int64_t hd=head,mn=min_pos,mx=max_pos,st=s,ls=last_s,li=last_in,sc=steps;
+		for(int64_t i=0;i<n;++i){
+			if(st==-1){
+				head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=sc;
+				return true;
+			}
+			uint8_t in=tp[hd];
+			if constexpr(RecordH){
+				hp[sc]=(uint8_t)(((st*N_CHAR+in)*2+(hd==mn))*2+(hd==mx));
+			}
+			++sc;
+			const Trans &tr=tm.trans[st][in];
+			ls=st;li=in;st=tr.nxt;
+			tp[hd]=(uint8_t)tr.out;
+			hd+=tr.dir;
+			if(hd<mn)mn=hd;
+			if(hd>mx)mx=hd;
+		}
+		head=hd;min_pos=mn;max_pos=mx;s=st;last_s=ls;last_in=li;steps=sc;
+		return false;
+	}
+	bool check_tc(int64_t N)const{
+		return FastTape::check_tc_buf(h.data(),N,max_pos-min_pos);
+	}
+};
+
 struct TNF{
 	int64_t n_decided=0,n_tot=0,n_unknown=0;
 	std::mt19937 mt;
@@ -2072,13 +2833,189 @@ struct TNF{
 		}
 		dfs(tm,min_unused_state,min_unused_char,rest_trans);
 	}
+	static int64_t run_ng_plain(const TM &tm,int64_t maxT,size_t ng_n){
+		if constexpr(N_CHAR!=2||N_STATE>8){
+			return run_ng(tm,0,0,maxT,ng_n);
+		}
+		// Specialized exact MitM_CTL::Decider<NG> for len=1, len_h=0, tH=0, pos_mod=1, ng_n<=3 (at most 16 states)
+		const uint8_t ng_lim=(uint8_t)(1u<<ng_n);
+		const uint8_t ng_mask=(uint8_t)(ng_lim-1);
+		struct SmallDFA{
+			uint8_t id_of_code[16];
+			uint8_t code_of_id[16];
+			uint8_t push_tab[16][2];
+			uint8_t pop_cnt[16];
+			uint8_t pop_edges[16][32]; // (ls<<1)|b
+			uint16_t upds[40];         // (ls0<<8)|(ls<<1)|b
+			uint8_t n_states,upds_sz;
+			int32_t n_upd;
+			inline void init(uint8_t ng_lim,uint8_t ng_mask){
+				memset(id_of_code,0,sizeof(id_of_code));
+				memset(push_tab,0,sizeof(push_tab));
+				memset(pop_cnt,0,sizeof(pop_cnt));
+				n_states=1;
+				id_of_code[1]=1;
+				code_of_id[1]=1;
+				upds_sz=0;
+				n_upd=0;
+				uint8_t id1=1;
+				do id1=push(0,id1,ng_lim,ng_mask); while(id1!=1);
+			}
+			inline uint8_t push(uint8_t b,uint8_t ls,uint8_t ng_lim,uint8_t ng_mask){
+				uint8_t ret=push_tab[ls][b];
+				if(!ret){
+					uint8_t code=code_of_id[ls];
+					if(!(code==1&&b==0)){
+						if(code<ng_lim)code=(uint8_t)((code<<1)|b);
+						else code=(uint8_t)(ng_lim|((code<<1)&ng_mask)|b);
+					}
+					uint8_t ls0=id_of_code[code];
+					if(!ls0){
+						ls0=++n_states;
+						id_of_code[code]=ls0;
+						code_of_id[ls0]=code;
+					}
+					push_tab[ls][b]=ls0;
+					uint8_t edge=(uint8_t)((ls<<1)|b);
+					pop_edges[ls0][pop_cnt[ls0]++]=edge;
+					upds[upds_sz++]=(uint16_t)(((uint16_t)ls0<<8)|edge);
+					++n_upd;
+					return ls0;
+				}
+				return ret;
+			}
+		}lset,rset;
+		lset.init(ng_lim,ng_mask);
+		rset.init(ng_lim,ng_mask);
+		uint64_t inq_lo[2][16]={};
+		uint64_t inq_hi[2][16]={};
+		uint32_t q[512]; // (l<<16)|(r<<8)|(s<<1)|(sgn==1)
+		int32_t q_sz=0;
+		auto push_q=[&](uint8_t l,uint8_t r,uint8_t s,int8_t sgn){
+			int side=(sgn==1?1:0);
+			uint32_t bit=((uint32_t)l<<3)|s;
+			uint64_t &word=(bit<64)?inq_lo[side][r]:inq_hi[side][r];
+			uint64_t mask=1ULL<<(bit&63);
+			if(!(word&mask)){
+				word|=mask;
+				q[q_sz++]=((uint32_t)l<<16)|((uint32_t)r<<8)|((uint32_t)s<<1)|(uint32_t)side;
+			}
+		};
+		push_q(1,1,0,1);
+		int64_t used_T=0;
+		for(;;){
+			if(q_sz>0){
+				uint32_t item=q[--q_sz];
+				uint8_t l=(uint8_t)(item>>16);
+				uint8_t r=(uint8_t)(item>>8);
+				uint8_t s=(uint8_t)((item>>1)&7);
+				int8_t sgn=(item&1)?1:-1;
+				SmallDFA &d=(sgn==1?rset:lset);
+				SmallDFA &o=(sgn==1?lset:rset);
+				uint8_t cnt=d.pop_cnt[r];
+				for(uint8_t i=0;i<cnt;++i){
+					uint8_t edge=d.pop_edges[r][i];
+					uint8_t b=edge&1;
+					uint8_t r1=edge>>1;
+					const Trans &tr=tm.trans[s][b];
+					if(tr.nxt==-1)return 0;
+					if(tr.dir*sgn<0){
+						uint8_t nl=d.push((uint8_t)tr.out,r1,ng_lim,ng_mask);
+						push_q(nl,l,(uint8_t)tr.nxt,(int8_t)(-sgn));
+					}else{
+						uint8_t nl=o.push((uint8_t)tr.out,l,ng_lim,ng_mask);
+						push_q(nl,r1,(uint8_t)tr.nxt,sgn);
+					}
+				}
+			}else if(lset.upds_sz>0){
+				uint16_t u=lset.upds[--lset.upds_sz];
+				uint8_t id0=(uint8_t)(u>>8);
+				uint8_t b=(uint8_t)(u&1);
+				uint8_t r1=(uint8_t)((u>>1)&0x7F);
+				uint64_t m0=inq_lo[0][id0],m1=inq_hi[0][id0];
+				while(m0){
+					uint32_t bit=(uint32_t)__builtin_ctzll(m0);
+					m0&=m0-1;
+					uint8_t l=(uint8_t)(bit>>3),s=(uint8_t)(bit&7);
+					const Trans &tr=tm.trans[s][b];
+					if(tr.nxt==-1)return 0;
+					if(tr.dir>0){ // tr.dir * (-1) < 0
+						uint8_t nl=lset.push((uint8_t)tr.out,r1,ng_lim,ng_mask);
+						push_q(nl,l,(uint8_t)tr.nxt,1);
+					}else{
+						uint8_t nl=rset.push((uint8_t)tr.out,l,ng_lim,ng_mask);
+						push_q(nl,r1,(uint8_t)tr.nxt,-1);
+					}
+				}
+				while(m1){
+					uint32_t bit=64u+(uint32_t)__builtin_ctzll(m1);
+					m1&=m1-1;
+					uint8_t l=(uint8_t)(bit>>3),s=(uint8_t)(bit&7);
+					const Trans &tr=tm.trans[s][b];
+					if(tr.nxt==-1)return 0;
+					if(tr.dir>0){
+						uint8_t nl=lset.push((uint8_t)tr.out,r1,ng_lim,ng_mask);
+						push_q(nl,l,(uint8_t)tr.nxt,1);
+					}else{
+						uint8_t nl=rset.push((uint8_t)tr.out,l,ng_lim,ng_mask);
+						push_q(nl,r1,(uint8_t)tr.nxt,-1);
+					}
+				}
+			}else if(rset.upds_sz>0){
+				uint16_t u=rset.upds[--rset.upds_sz];
+				uint8_t id0=(uint8_t)(u>>8);
+				uint8_t b=(uint8_t)(u&1);
+				uint8_t r1=(uint8_t)((u>>1)&0x7F);
+				uint64_t m0=inq_lo[1][id0],m1=inq_hi[1][id0];
+				while(m0){
+					uint32_t bit=(uint32_t)__builtin_ctzll(m0);
+					m0&=m0-1;
+					uint8_t l=(uint8_t)(bit>>3),s=(uint8_t)(bit&7);
+					const Trans &tr=tm.trans[s][b];
+					if(tr.nxt==-1)return 0;
+					if(tr.dir<0){ // tr.dir * (+1) < 0
+						uint8_t nl=rset.push((uint8_t)tr.out,r1,ng_lim,ng_mask);
+						push_q(nl,l,(uint8_t)tr.nxt,-1);
+					}else{
+						uint8_t nl=lset.push((uint8_t)tr.out,l,ng_lim,ng_mask);
+						push_q(nl,r1,(uint8_t)tr.nxt,1);
+					}
+				}
+				while(m1){
+					uint32_t bit=64u+(uint32_t)__builtin_ctzll(m1);
+					m1&=m1-1;
+					uint8_t l=(uint8_t)(bit>>3),s=(uint8_t)(bit&7);
+					const Trans &tr=tm.trans[s][b];
+					if(tr.nxt==-1)return 0;
+					if(tr.dir<0){
+						uint8_t nl=rset.push((uint8_t)tr.out,r1,ng_lim,ng_mask);
+						push_q(nl,l,(uint8_t)tr.nxt,-1);
+					}else{
+						uint8_t nl=lset.push((uint8_t)tr.out,l,ng_lim,ng_mask);
+						push_q(nl,r1,(uint8_t)tr.nxt,1);
+					}
+				}
+			}else{
+				return 2;
+			}
+			++used_T;
+			if(used_T+q_sz+lset.upds_sz+rset.upds_sz>=maxT)return 0;
+			if(lset.n_upd+rset.n_upd>=maxT)return 0;
+		}
+	}
 	static int64_t run_ng(const TM &tm,int64_t lruh,int64_t h,int64_t maxT,size_t ng_n){
+		if constexpr(N_CHAR==2&&log2_N_STATE==3){
+			if(lruh>=1&&lruh<=14&&ng_n>=1&&ng_n<=3&&maxT<65535){
+				thread_local Decider64 d64;
+				return d64.decide(tm,lruh,h,maxT,ng_n);
+			}
+		}
 		ChrTransform::init();
 		ChrTransform::len_h=lruh;
 		ChrTransform::len_h_no_lru=h;
 		MitM_CTL::NG::init();
 		MitM_CTL::NG::NG_n=ng_n;
-		MitM_CTL::Decider<MitM_CTL::NG> f;
+		thread_local MitM_CTL::Decider<MitM_CTL::NG> f;
 		f.len=1;
 		DH_Tape tape0;
 		return f.decide(tm,maxT,tape0);
@@ -2090,7 +3027,7 @@ struct TNF{
 		MitM_CTL::CPS_LRU::len_h=lruh;
 		MitM_CTL::CPS_LRU::len_h_no_lru=h;
 		MitM_CTL::CPS_LRU::len_h_tail=th;
-		MitM_CTL::Decider<MitM_CTL::CPS_LRU> f;
+		thread_local MitM_CTL::Decider<MitM_CTL::CPS_LRU> f;
 		f.len=n;
 		return f.decide(tm,maxT,tape_sim);
 	}
@@ -2100,73 +3037,58 @@ struct TNF{
 		MitM_CTL::RWL_mod::init();
 		MitM_CTL::RWL_mod::len_h=h;
 		MitM_CTL::RWL_mod::mod=mod;
-		MitM_CTL::Decider<MitM_CTL::RWL_mod> f;
+		thread_local MitM_CTL::Decider<MitM_CTL::RWL_mod> f;
 		f.len=n;
 		return f.decide(tm,maxT,tape_sim);
 	}
 	void dfs(TM &tm,int64_t min_unused_state,int64_t min_unused_char,int64_t rest_trans){
 		if(app_stopped)return;
-		DH_Tape ht;
-		if(auto o=ht.check_halt(tm,50)){
-			auto [T,s,m]=*o;
-			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+		FastTape ht;
+		if(ht.run_first_50(tm)){
+			expand(tm,min_unused_state,min_unused_char,rest_trans,ht.last_s,ht.last_in);
 			goto o;
 		}
-		{
-			Basic0::Tape t;
-			if(t.check_translated_cycler(tm,50,50)){
-				goto o_nonhalt;
-			}
+		if(ht.check_tc(50)){
+			goto o_nonhalt;
 		}
-		if(auto o=ht.check_halt_cont(tm,250)){
-			auto [T,s,m]=*o;
-			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+		if(ht.run_next_250(tm)){
+			expand(tm,min_unused_state,min_unused_char,rest_trans,ht.last_s,ht.last_in);
 			goto o;
 		}
-		{
-			Basic0::Tape t;
-			if(t.check_translated_cycler(tm,300,300)){
-				goto o_nonhalt;
-			}
+		if(ht.check_tc(300)){
+			goto o_nonhalt;
 		}
 		MitM_CTL::CTL_skip_verify=1;
-		if(run_ng(tm,0,0,100,1)==2)goto o_nonhalt;
-		if(run_ng(tm,0,0,200,2)==2)goto o_nonhalt;
-		if(run_ng(tm,0,0,300,3)==2)goto o_nonhalt;
+		if(run_ng_plain(tm,100,1)==2)goto o_nonhalt;
+		if(run_ng_plain(tm,200,2)==2)goto o_nonhalt;
+		if(run_ng_plain(tm,300,3)==2)goto o_nonhalt;
 		if(run_ng(tm,6,3,3000,3)==2)goto o_nonhalt;
-		if(auto o=ht.check_halt_cont(tm,701)){
-			auto [T,s,m]=*o;
-			expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
-			goto o;
-		}
 		{
-			DH_Tape tape_1001=ht;
-			if(auto o=ht.check_halt_cont(tm,1999)){
-				auto [T,s,m]=*o;
-				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			LongTape lt(ht);
+			if(lt.run_steps<true>(tm,701)){
+				expand(tm,min_unused_state,min_unused_char,rest_trans,lt.last_s,lt.last_in);
 				goto o;
 			}
-			{
-				Basic0::Tape t;
-				if(t.check_translated_cycler(tm,3000,3000)){
-					goto o_nonhalt;
-				}
+			if(lt.run_steps<true>(tm,1999)){
+				expand(tm,min_unused_state,min_unused_char,rest_trans,lt.last_s,lt.last_in);
+				goto o;
+			}
+			if(lt.check_tc(3000)){
+				goto o_nonhalt;
 			}
 			if(run_ng(tm,14,8,1000,2)==2)goto o_nonhalt;
 			if(run_ng(tm,4,2,3000,1)==2)goto o_nonhalt;
+			DH_Tape tape_1001;
+			tape_1001.check_halt(tm,1001);
 			if(run_cps_lru(tm,tape_1001,1000,4,1,0,6)==2)goto o_nonhalt;
 			if(run_ng(tm,12,12,3000,3)==2)goto o_nonhalt;
 			if(run_rwl_mod(tm,tape_1001,3000,4,2,8)==2)goto o_nonhalt;
-			if(auto o=ht.check_halt_cont(tm,27000)){
-				auto [T,s,m]=*o;
-				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			if(lt.run_steps<true>(tm,27000)){
+				expand(tm,min_unused_state,min_unused_char,rest_trans,lt.last_s,lt.last_in);
 				goto o;
 			}
-			{
-				Basic0::Tape t;
-				if(t.check_translated_cycler(tm,30000,30000)){
-					goto o_nonhalt;
-				}
+			if(lt.check_tc(30000)){
+				goto o_nonhalt;
 			}
 			if(run_rwl_mod(tm,tape_1001,10000,3,2,1)==2)goto o_nonhalt;
 			if(run_cps_lru(tm,tape_1001,3000,12,1,1,2)==2)goto o_nonhalt;
@@ -2177,9 +3099,8 @@ struct TNF{
 			if(run_ng(tm,16,12,10000,5)==2)goto o_nonhalt;
 			if(run_cps_lru(tm,tape_1001,3000,16,0,2,3)==2)goto o_nonhalt;
 			if(run_ng(tm,5,1,10000,2)==2)goto o_nonhalt;
-			if(auto o=ht.check_halt_cont(tm,270000)){
-				auto [T,s,m]=*o;
-				expand(tm,min_unused_state,min_unused_char,rest_trans,s,m);
+			if(lt.run_steps<false>(tm,270000)){
+				expand(tm,min_unused_state,min_unused_char,rest_trans,lt.last_s,lt.last_in);
 				goto o;
 			}
 		}
